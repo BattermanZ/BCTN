@@ -1,4 +1,6 @@
 from logging.config import fileConfig
+import os
+from dotenv import load_dotenv
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -9,8 +11,20 @@ from alembic import context
 # access to the values within the .ini file in use.
 config = context.config
 
+# Load .env file and construct the database URL
+load_dotenv()
+db_user = os.getenv("DB_USER")
+db_password = os.getenv("DB_PASSWORD")
+db_host = os.getenv("DB_HOST")
+db_port = os.getenv("DB_PORT")
+db_name = os.getenv("DB_NAME")
+
+if all((db_user, db_password, db_host, db_port, db_name)):
+    db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    config.set_main_option("sqlalchemy.url", db_url)
+
 # Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# This line needs to be located at the top of the file.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
