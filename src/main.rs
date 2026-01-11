@@ -7,12 +7,26 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
-use rusqlite::{Connection, OptionalExtension, params};
+use clap::{Parser, Subcommand};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 #[derive(Debug, Parser)]
 #[command(name = "bctn", version)]
 struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    Ingest(IngestArgs),
+    Search(SearchArgs),
+    Show(ShowArgs),
+    Top(TopArgs),
+}
+
+#[derive(Debug, Parser)]
+struct IngestArgs {
     #[arg(long, default_value = "database_source")]
     database_source_dir: PathBuf,
 
@@ -24,6 +38,46 @@ struct Cli {
 
     #[arg(long, default_value_t = 2024)]
     end_year: i32,
+}
+
+#[derive(Debug, Parser)]
+struct SearchArgs {
+    #[arg(long, default_value = "data/bctn.sqlite")]
+    db: PathBuf,
+
+    query: String,
+
+    #[arg(long)]
+    contains: bool,
+
+    #[arg(long, default_value_t = 25)]
+    limit: u32,
+}
+
+#[derive(Debug, Parser)]
+struct ShowArgs {
+    #[arg(long, default_value = "data/bctn.sqlite")]
+    db: PathBuf,
+
+    term: String,
+}
+
+#[derive(Debug, Parser)]
+struct TopArgs {
+    #[arg(long, default_value = "data/bctn.sqlite")]
+    db: PathBuf,
+
+    #[arg(long)]
+    country: String,
+
+    #[arg(long)]
+    year: i32,
+
+    #[arg(long)]
+    sex: Option<String>,
+
+    #[arg(long, default_value_t = 25)]
+    limit: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,41 +120,201 @@ struct IngestCaches {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if cli.start_year > cli.end_year {
+    match cli.command {
+        Command::Ingest(args) => run_ingest(args),
+        Command::Search(args) => run_search(args),
+        Command::Show(args) => run_show(args),
+        Command::Top(args) => run_top(args),
+    }
+}
+
+fn open_readonly(db: &Path) -> Result<Connection> {
+    Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open sqlite db (read-only) {db:?}"))
+}
+
+fn fold_query(input: &str) -> Result<String> {
+    let norm = normalize::norm_display(input);
+    let key_strict = normalize::key_strict(&norm);
+    let folded = normalize::key_folded(&key_strict);
+    if folded.is_empty() {
+        bail!("query folds to empty string");
+    }
+    Ok(folded)
+}
+
+fn run_search(args: SearchArgs) -> Result<()> {
+    let conn = open_readonly(&args.db)?;
+
+    let folded = fold_query(&args.query)?;
+    let pattern = if args.contains {
+        format!("%{folded}%")
+    } else {
+        format!("{folded}%")
+    };
+    let mut stmt = conn.prepare(
+        "SELECT
+           c.concept_key,
+           pref.display AS preferred,
+           group_concat(DISTINCT o.country) AS locales
+         FROM name_concept c
+         JOIN name_string pref ON pref.id = c.preferred_name_string_id
+         JOIN name_concept_member m ON m.concept_id = c.id
+         JOIN name_observation o ON o.name_string_id = m.name_string_id
+         WHERE c.concept_key LIKE ?1
+         GROUP BY c.id
+         ORDER BY pref.display
+         LIMIT ?2",
+    )?;
+
+    let mut rows = stmt.query(params![pattern, args.limit])?;
+    while let Some(row) = rows.next()? {
+        let concept_key: String = row.get(0)?;
+        let preferred: String = row.get(1)?;
+        let locales: String = row.get(2)?;
+        println!("{concept_key}\t{preferred}\t{locales}");
+    }
+    Ok(())
+}
+
+fn run_show(args: ShowArgs) -> Result<()> {
+    let conn = open_readonly(&args.db)?;
+
+    let folded = fold_query(&args.term)?;
+    let concept_id: i64 = conn
+        .query_row(
+            "SELECT id FROM name_concept WHERE concept_key = ?1",
+            params![folded],
+            |r| r.get(0),
+        )
+        .optional()?
+        .with_context(|| format!("no concept found for key '{folded}'"))?;
+
+    let (concept_key, preferred): (String, String) = conn.query_row(
+        "SELECT c.concept_key, ns.display
+         FROM name_concept c
+         JOIN name_string ns ON ns.id = c.preferred_name_string_id
+         WHERE c.id = ?1",
+        params![concept_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    println!("concept_key\t{concept_key}");
+    println!("preferred\t{preferred}");
+
+    println!("spellings");
+    let mut spellings_stmt = conn.prepare(
+        "SELECT DISTINCT o.name_raw
+         FROM name_observation o
+         JOIN name_concept_member m ON m.name_string_id = o.name_string_id
+         WHERE m.concept_id = ?1
+         ORDER BY o.name_raw
+         LIMIT 200",
+    )?;
+    let mut spellings = spellings_stmt.query(params![concept_id])?;
+    while let Some(row) = spellings.next()? {
+        let display: String = row.get(0)?;
+        println!("\t{display}");
+    }
+
+    println!("by_country\tcountry\tmin_year\tmax_year\ttotal_count");
+    let mut country_stmt = conn.prepare(
+        "SELECT o.country, MIN(o.year), MAX(o.year), SUM(o.count)
+         FROM name_observation o
+         JOIN name_concept_member m ON m.name_string_id = o.name_string_id
+         WHERE m.concept_id = ?1
+         GROUP BY o.country
+         ORDER BY o.country",
+    )?;
+    let mut country_rows = country_stmt.query(params![concept_id])?;
+    while let Some(row) = country_rows.next()? {
+        let country: String = row.get(0)?;
+        let min_year: i32 = row.get(1)?;
+        let max_year: i32 = row.get(2)?;
+        let total: i64 = row.get(3)?;
+        println!("\t{country}\t{min_year}\t{max_year}\t{total}");
+    }
+
+    Ok(())
+}
+
+fn run_top(args: TopArgs) -> Result<()> {
+    let conn = open_readonly(&args.db)?;
+    if args.country != "US" && args.country != "FR" && args.country != "CL" {
+        bail!("country must be one of: US, FR, CL");
+    }
+    let sex = args.sex.as_deref();
+    if let Some(sex) = sex
+        && sex != "M"
+        && sex != "F"
+        && sex != "U"
+    {
+        bail!("sex must be one of: M, F, U");
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT
+           c.concept_key,
+           pref.display AS preferred,
+           SUM(o.count) AS total
+         FROM name_observation o
+         JOIN name_concept_member m ON m.name_string_id = o.name_string_id
+         JOIN name_concept c ON c.id = m.concept_id
+         JOIN name_string pref ON pref.id = c.preferred_name_string_id
+         WHERE o.country = ?1
+           AND o.year = ?2
+           AND (?3 IS NULL OR o.sex = ?3)
+         GROUP BY c.id
+         ORDER BY total DESC
+         LIMIT ?4",
+    )?;
+
+    let mut rows = stmt.query(params![args.country, args.year, sex, args.limit])?;
+    while let Some(row) = rows.next()? {
+        let concept_key: String = row.get(0)?;
+        let preferred: String = row.get(1)?;
+        let total: i64 = row.get(2)?;
+        println!("{concept_key}\t{preferred}\t{total}");
+    }
+    Ok(())
+}
+
+fn run_ingest(args: IngestArgs) -> Result<()> {
+    if args.start_year > args.end_year {
         bail!("start_year must be <= end_year");
     }
 
-    let Some(parent) = cli.out.parent() else {
+    let Some(parent) = args.out.parent() else {
         bail!("output path must have a parent directory");
     };
     fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
-    if cli.out.exists() {
-        fs::remove_file(&cli.out).with_context(|| format!("remove existing db {:?}", cli.out))?;
+    if args.out.exists() {
+        fs::remove_file(&args.out).with_context(|| format!("remove existing db {:?}", args.out))?;
     }
 
-    let mut ingest = IngestContext::new(&cli.out, cli.start_year, cli.end_year)?;
-
+    let mut ingest = IngestContext::new(&args.out, args.start_year, args.end_year)?;
     let sources = insert_sources(&ingest.conn)?;
+
     ingest_us(
         &mut ingest,
         sources.us_ssa,
-        &cli.database_source_dir.join("US_names"),
-        cli.start_year,
-        cli.end_year,
+        &args.database_source_dir.join("US_names"),
+        args.start_year,
+        args.end_year,
     )?;
     ingest_fr(
         &mut ingest,
         sources.fr_insee,
-        &cli.database_source_dir.join("French_names.csv"),
-        cli.start_year,
-        cli.end_year,
+        &args.database_source_dir.join("French_names.csv"),
+        args.start_year,
+        args.end_year,
     )?;
     ingest_cl(
         &mut ingest,
         sources.cl_guaguas,
-        &cli.database_source_dir.join("CL_names/1920-2021.csv"),
-        cli.start_year,
-        cli.end_year,
+        &args.database_source_dir.join("CL_names/1920-2021.csv"),
+        args.start_year,
+        args.end_year,
     )?;
 
     ingest.finish_run()?;
@@ -245,7 +459,7 @@ fn insert_sources(conn: &Connection) -> Result<SourceIds> {
         "US SSA baby names (yob*.txt)",
         Country::Us.as_str(),
         "https://www.ssa.gov/oact/babynames/limits.html",
-        "Unknown",
+        "Public domain (US government)",
     ])?;
     let us_ssa = conn.query_row(
         "SELECT id FROM source WHERE source_key = 'us_ssa'",
@@ -257,8 +471,8 @@ fn insert_sources(conn: &Connection) -> Result<SourceIds> {
         "fr_insee",
         "France INSEE first names",
         Country::Fr.as_str(),
-        "Unknown",
-        "Unknown",
+        "https://www.insee.fr/fr/statistiques/2540004",
+        "See https://www.insee.fr/fr/information/2382777",
     ])?;
     let fr_insee = conn.query_row(
         "SELECT id FROM source WHERE source_key = 'fr_insee'",
@@ -313,8 +527,8 @@ fn ingest_us(
 
     let mut obs_stmt = conn.prepare(
         "INSERT INTO name_observation
-         (run_id, source_id, name_string_id, country, year, sex, sex_raw, count, proportion)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+         (run_id, source_id, name_string_id, name_raw, country, year, sex, sex_raw, count, proportion)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
     )?;
 
     for path in entries {
@@ -339,6 +553,7 @@ fn ingest_us(
                 ingest.run_id,
                 source_id,
                 name_string_id,
+                name,
                 Country::Us.as_str(),
                 year,
                 sex_raw,
@@ -402,8 +617,8 @@ fn ingest_fr(
 
     let mut obs_stmt = conn.prepare(
         "INSERT INTO name_observation
-         (run_id, source_id, name_string_id, country, year, sex, sex_raw, count, proportion)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+         (run_id, source_id, name_string_id, name_raw, country, year, sex, sex_raw, count, proportion)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
     )?;
 
     for result in reader.records() {
@@ -439,6 +654,7 @@ fn ingest_fr(
             ingest.run_id,
             source_id,
             name_string_id,
+            name,
             Country::Fr.as_str(),
             year,
             sex,
@@ -471,8 +687,8 @@ fn ingest_cl(
 
     let mut obs_stmt = conn.prepare(
         "INSERT INTO name_observation
-         (run_id, source_id, name_string_id, country, year, sex, sex_raw, count, proportion)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         (run_id, source_id, name_string_id, name_raw, country, year, sex, sex_raw, count, proportion)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?;
 
     for result in reader.records() {
@@ -511,6 +727,7 @@ fn ingest_cl(
             ingest.run_id,
             source_id,
             name_string_id,
+            name,
             Country::Cl.as_str(),
             year,
             sex,

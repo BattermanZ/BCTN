@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS name_observation (
   run_id INTEGER NOT NULL REFERENCES import_run(id) ON DELETE CASCADE,
   source_id INTEGER NOT NULL REFERENCES source(id),
   name_string_id INTEGER NOT NULL REFERENCES name_string(id),
+  name_raw TEXT NOT NULL,
   country TEXT NOT NULL,
   year INTEGER NOT NULL,
   sex TEXT NOT NULL,
@@ -59,4 +60,4 @@ CREATE TABLE IF NOT EXISTS name_observation (
 CREATE INDEX IF NOT EXISTS idx_name_observation_country_year ON name_observation(country, year);
 CREATE INDEX IF NOT EXISTS idx_name_observation_name_string ON name_observation(name_string_id);
 CREATE INDEX IF NOT EXISTS idx_name_observation_year ON name_observation(year);
-
+CREATE INDEX IF NOT EXISTS idx_name_observation_name_raw ON name_observation(name_raw);
