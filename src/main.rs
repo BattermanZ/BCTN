@@ -3,6 +3,8 @@ mod normalize;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -327,6 +329,9 @@ impl IngestContext {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
+        conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+        conn.pragma_update(None, "cache_size", "-200000")?;
 
         conn.execute_batch(include_str!("schema.sql"))?;
         conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -349,6 +354,8 @@ impl IngestContext {
     }
 
     fn finish_run(&mut self) -> Result<()> {
+        self.conn
+            .execute_batch(include_str!("schema_indexes.sql"))?;
         let finished_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         self.conn.execute(
             "UPDATE import_run SET finished_at = ?1 WHERE id = ?2",
@@ -537,13 +544,15 @@ fn ingest_us(
             continue;
         }
 
-        let contents = fs::read_to_string(&path).with_context(|| format!("read {path:?}"))?;
-        for (line_no, line) in contents.lines().enumerate() {
+        let file = File::open(&path).with_context(|| format!("open {path:?}"))?;
+        let reader = BufReader::new(file);
+        for (line_no, line) in reader.lines().enumerate() {
+            let line = line.with_context(|| format!("read {path:?}:{line_no}"))?;
             if line.trim().is_empty() {
                 continue;
             }
             let (name, sex_raw, count) =
-                parse_us_line(line).with_context(|| format!("parse {path:?}:{line_no}"))?;
+                parse_us_line(&line).with_context(|| format!("parse {path:?}:{line_no}"))?;
             let (name_string_id, derived) = caches.get_or_create_name_string(conn, name)?;
             let concept_id =
                 caches.get_or_create_concept(conn, &derived.key_folded, name_string_id)?;
@@ -609,6 +618,7 @@ fn ingest_fr(
 
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b';')
+        .buffer_capacity(1024 * 1024)
         .from_path(path)
         .with_context(|| format!("open {path:?}"))?;
 
@@ -679,6 +689,7 @@ fn ingest_cl(
 
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b',')
+        .buffer_capacity(1024 * 1024)
         .from_path(path)
         .with_context(|| format!("open {path:?}"))?;
 
