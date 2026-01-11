@@ -674,23 +674,20 @@ fn run_variants_build_ensemble(args: VariantsBuildEnsembleArgs) -> Result<()> {
         let global_country_totals = load_country_totals_all_countries(&tx)?;
         let qids = load_country_concept_qids(&tx)?;
 
-        let blocks = build_blocks_by_prefix(&concepts);
+        let blocks = build_blocks_by_prefix3_sorted_by_len(&concepts);
 
         for ids in blocks.values() {
             if ids.len() < 2 {
                 continue;
             }
-            for i in 0..ids.len() {
-                for j in (i + 1)..ids.len() {
-                    let a = &concepts[ids[i]];
-                    let b = &concepts[ids[j]];
-                    if a.concept_key
-                        .chars()
-                        .count()
-                        .abs_diff(b.concept_key.chars().count())
-                        > args.max_edit_distance
-                    {
-                        continue;
+            for pos_i in 0..ids.len() {
+                let a = &concepts[ids[pos_i]];
+                let a_len = a.concept_key.chars().count();
+                for pos_j in (pos_i + 1)..ids.len() {
+                    let b = &concepts[ids[pos_j]];
+                    let b_len = b.concept_key.chars().count();
+                    if b_len.saturating_sub(a_len) > args.max_edit_distance {
+                        break;
                     }
 
                     let Some(dist) =
@@ -704,11 +701,12 @@ fn run_variants_build_ensemble(args: VariantsBuildEnsembleArgs) -> Result<()> {
                         continue;
                     }
 
-                    let shared_qid = concepts_share_qid_from_map(&qids, a.concept_id, b.concept_id);
-                    if shared_qid {
+                    let shared_primary_qid =
+                        concepts_share_primary_qid_from_map(&qids, a.concept_id, b.concept_id);
+                    if shared_primary_qid {
                         let evidence = json!({
                             "string": {"a": a.concept_key, "b": b.concept_key, "edit_distance": dist},
-                            "wikidata": {"shared_qid": true}
+                            "wikidata": {"shared_qid": true, "shared_primary_qid": true}
                         });
                         let key = (
                             a.concept_id.min(b.concept_id),
@@ -721,8 +719,8 @@ fn run_variants_build_ensemble(args: VariantsBuildEnsembleArgs) -> Result<()> {
                         continue;
                     }
 
-                    let (trend_score, corr_opt, years_overlap, magnitude_score, magnitude_ratio) =
-                        trend_correlation_score(
+                    let (corr_score, corr_opt, years_overlap, magnitude_score, magnitude_ratio) =
+                        trend_correlation_signals(
                             &series,
                             a.concept_id,
                             b.concept_id,
@@ -732,14 +730,20 @@ fn run_variants_build_ensemble(args: VariantsBuildEnsembleArgs) -> Result<()> {
                     let collision =
                         collision_info(&global_country_totals, a.concept_id, b.concept_id, dist);
 
-                    let mut ensemble = 0.45 * string_score + 0.40 * trend_score + 0.15 * sex_score;
+                    let mut ensemble = 0.40 * string_score
+                        + 0.30 * corr_score
+                        + 0.15 * magnitude_score
+                        + 0.15 * sex_score;
                     ensemble = (ensemble - collision.penalty).clamp(0.0, 1.0);
 
                     let extremely_common_one_edit =
                         dist == 1 && collision.a_total >= 50_000 && collision.b_total >= 50_000;
+                    let shared_any_qid =
+                        concepts_share_any_qid_from_map(&qids, a.concept_id, b.concept_id);
 
                     let status = if ensemble >= args.accept_threshold
-                        && trend_score >= 0.95
+                        && corr_score >= 0.95
+                        && magnitude_score >= 0.90
                         && string_score >= 0.93
                         && sex_score >= 0.80
                         && !extremely_common_one_edit
@@ -754,7 +758,8 @@ fn run_variants_build_ensemble(args: VariantsBuildEnsembleArgs) -> Result<()> {
                     let evidence = json!({
                         "decision": {"status": status, "score": ensemble},
                         "string": {"a": a.concept_key, "b": b.concept_key, "edit_distance": dist, "string_score": string_score},
-                        "trend": {"corr": corr_opt, "years_overlap": years_overlap, "trend_score": trend_score, "magnitude_score": magnitude_score, "magnitude_ratio": magnitude_ratio},
+                        "wikidata": {"shared_qid": shared_any_qid, "shared_primary_qid": false},
+                        "trend": {"corr": corr_opt, "years_overlap": years_overlap, "corr_score": corr_score, "magnitude_score": magnitude_score, "magnitude_ratio": magnitude_ratio},
                         "sex": {"sex_score": sex_score},
                         "collision": {"penalty": collision.penalty, "a_total": collision.a_total, "b_total": collision.b_total, "a_countries_ge_100": collision.a_countries_ge_100, "b_countries_ge_100": collision.b_countries_ge_100},
                         "names": {"a_preferred": a.preferred, "b_preferred": b.preferred}
@@ -910,11 +915,16 @@ fn load_country_totals_all_countries(conn: &Connection) -> Result<CountryTotalsA
     Ok(out)
 }
 
-fn build_blocks_by_prefix(concepts: &[CountryConcept]) -> HashMap<String, Vec<usize>> {
+fn build_blocks_by_prefix3_sorted_by_len(
+    concepts: &[CountryConcept],
+) -> HashMap<String, Vec<usize>> {
     let mut blocks: HashMap<String, Vec<usize>> = HashMap::new();
     for (idx, c) in concepts.iter().enumerate() {
-        let prefix: String = c.concept_key.chars().take(2).collect();
+        let prefix: String = c.concept_key.chars().take(3).collect();
         blocks.entry(prefix).or_default().push(idx);
+    }
+    for ids in blocks.values_mut() {
+        ids.sort_by_key(|idx| concepts[*idx].concept_key.chars().count());
     }
     blocks
 }
@@ -929,7 +939,7 @@ fn string_score_from_distance(dist: usize) -> f64 {
     }
 }
 
-fn trend_correlation_score(
+fn trend_correlation_signals(
     series: &YearSeries,
     a: i64,
     b: i64,
@@ -952,6 +962,7 @@ fn trend_correlation_score(
     }
 
     let corr = pearson_corr(&xs, &ys).unwrap_or(0.0).clamp(-1.0, 1.0);
+    let corr_score = corr.max(0.0);
     let sum_x: f64 = xs.iter().sum();
     let sum_y: f64 = ys.iter().sum();
     let ratio = if sum_x > 0.0 && sum_y > 0.0 {
@@ -962,8 +973,7 @@ fn trend_correlation_score(
     let magnitude_score = ratio
         .map(|r| (1.0 - (r.ln().abs() / 2.0_f64.ln())).clamp(0.0, 1.0))
         .unwrap_or(0.0);
-    let score = corr.max(0.0) * magnitude_score;
-    (score, Some(corr), years, magnitude_score, ratio)
+    (corr_score, Some(corr), years, magnitude_score, ratio)
 }
 
 fn pearson_corr(xs: &[f64], ys: &[f64]) -> Option<f64> {
@@ -1045,41 +1055,76 @@ fn collision_info(totals: &CountryTotalsAll, a: i64, b: i64, dist: usize) -> Col
     }
 }
 
-type ConceptQids = HashMap<i64, Vec<String>>;
+#[derive(Debug, Default, Clone)]
+struct ConceptQids {
+    primary_qid: Option<String>,
+    primary_conflict: bool,
+    all_qids: Vec<String>,
+}
 
-fn load_country_concept_qids(conn: &Connection) -> Result<ConceptQids> {
+type ConceptQidsByConcept = HashMap<i64, ConceptQids>;
+
+fn load_country_concept_qids(conn: &Connection) -> Result<ConceptQidsByConcept> {
     let mut stmt = conn.prepare(
-        "SELECT tc.id, w.qid
+        "SELECT tc.id, w.qid, w.matched_label_lang
          FROM tmp_concept tc
          JOIN wikidata_concept_match w ON w.concept_id = tc.id",
     )?;
     let mut rows = stmt.query([])?;
-    let mut out: ConceptQids = HashMap::new();
+    let mut out: ConceptQidsByConcept = HashMap::new();
     while let Some(row) = rows.next()? {
         let concept_id: i64 = row.get(0)?;
         let qid: String = row.get(1)?;
-        out.entry(concept_id).or_default().push(qid);
+        let matched_label_lang: Option<String> = row.get(2)?;
+
+        let entry = out.entry(concept_id).or_default();
+        entry.all_qids.push(qid.clone());
+        if matched_label_lang.is_none() {
+            // Seed lookup match (most reliable): treat as primary QID.
+            if entry.primary_conflict {
+                continue;
+            }
+            match &entry.primary_qid {
+                None => entry.primary_qid = Some(qid),
+                Some(existing) => {
+                    if existing != &qid {
+                        // Multiple "primary" QIDs for one concept is ambiguous; mark conflict.
+                        entry.primary_qid = None;
+                        entry.primary_conflict = true;
+                    }
+                }
+            }
+        }
     }
     Ok(out)
 }
 
-fn concepts_share_qid_from_map(qids: &ConceptQids, a: i64, b: i64) -> bool {
+fn concepts_share_any_qid_from_map(qids: &ConceptQidsByConcept, a: i64, b: i64) -> bool {
     let Some(aq) = qids.get(&a) else { return false };
     let Some(bq) = qids.get(&b) else { return false };
-    if aq.len() <= bq.len() {
-        for q in aq {
-            if bq.iter().any(|x| x == q) {
+    if aq.all_qids.len() <= bq.all_qids.len() {
+        for q in &aq.all_qids {
+            if bq.all_qids.iter().any(|x| x == q) {
                 return true;
             }
         }
     } else {
-        for q in bq {
-            if aq.iter().any(|x| x == q) {
+        for q in &bq.all_qids {
+            if aq.all_qids.iter().any(|x| x == q) {
                 return true;
             }
         }
     }
     false
+}
+
+fn concepts_share_primary_qid_from_map(qids: &ConceptQidsByConcept, a: i64, b: i64) -> bool {
+    let Some(aq) = qids.get(&a) else { return false };
+    let Some(bq) = qids.get(&b) else { return false };
+    match (aq.primary_qid.as_deref(), bq.primary_qid.as_deref()) {
+        (Some(qa), Some(qb)) => qa == qb,
+        _ => false,
+    }
 }
 
 fn levenshtein_bounded(a: &str, b: &str, max: usize) -> Option<usize> {
