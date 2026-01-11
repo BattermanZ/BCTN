@@ -104,6 +104,10 @@ pub(crate) struct VariantsBuildArgs {
 
     #[arg(long)]
     pub(crate) no_clear: bool,
+
+    /// Emit progress to stderr every N search terms / entity batches (0 disables).
+    #[arg(long, default_value_t = 50)]
+    pub(crate) progress_every: u32,
 }
 
 #[derive(Debug, Parser)]

@@ -23,8 +23,20 @@ pub(super) fn run_build(args: VariantsBuildArgs) -> Result<()> {
     if args.batch_size == 0 {
         bail!("batch_size must be > 0");
     }
+    if args.progress_every == 0 {
+        // allowed: disables progress logs
+    }
 
     let mut conn = db::open_rw_with_schema(&args.db)?;
+
+    eprintln!(
+        "wikidata_start\tdb={}\tmax_concepts={}\tbatch_size={}\trequest_sleep_ms={}\tprogress_every={}",
+        args.db.display(),
+        args.max_concepts,
+        args.batch_size,
+        args.request_sleep_ms,
+        args.progress_every
+    );
 
     if !args.no_clear {
         conn.execute("DELETE FROM name_variant_edge", [])?;
@@ -55,19 +67,46 @@ pub(super) fn run_build(args: VariantsBuildArgs) -> Result<()> {
         WikidataCache::load(&args.cache_path).unwrap_or_default()
     };
 
+    let progress_every = args.progress_every as usize;
     let mut matched_qids: Vec<String> = Vec::new();
     let mut qid_by_query_name: HashMap<String, String> = HashMap::new();
+    let total_terms = query_name_to_concepts.len();
+    let mut searched_terms: usize = 0;
+    let mut search_cache_hits: usize = 0;
     for (query_name, concepts) in &query_name_to_concepts {
         let Some(seed) = concepts.first() else {
             continue;
         };
+        searched_terms += 1;
+        if cache.search_term_to_qid.contains_key(&seed.search_term) {
+            search_cache_hits += 1;
+        }
         if let Some(qid) = cache.search_given_name_qid(&agent, &seed.search_term, sleep)? {
             matched_qids.push(qid.clone());
             qid_by_query_name.insert(query_name.clone(), qid);
         }
+        if progress_every > 0
+            && (searched_terms.is_multiple_of(progress_every) || searched_terms == total_terms)
+        {
+            eprintln!(
+                "wikidata_search_progress\tsearched={}\ttotal={}\tcache_hits={}\tqids_found={}",
+                searched_terms,
+                total_terms,
+                search_cache_hits,
+                matched_qids.len()
+            );
+        }
     }
     matched_qids.sort();
     matched_qids.dedup();
+
+    eprintln!(
+        "wikidata_search_done\tsearched={}\ttotal={}\tcache_hits={}\tunique_qids={}",
+        searched_terms,
+        total_terms,
+        search_cache_hits,
+        matched_qids.len()
+    );
 
     let mut all_matches: Vec<WikidataConceptMatch> = Vec::new();
     for (query_name, qid) in &qid_by_query_name {
@@ -83,7 +122,28 @@ pub(super) fn run_build(args: VariantsBuildArgs) -> Result<()> {
         }
     }
 
+    let total_batches = matched_qids.len().div_ceil(args.batch_size as usize).max(1);
+    let mut batch_no: usize = 0;
     for batch in matched_qids.chunks(args.batch_size as usize) {
+        batch_no += 1;
+        let missing_entities = batch
+            .iter()
+            .filter(|qid| !cache.entities.contains_key(*qid))
+            .count();
+        if progress_every > 0
+            && (batch_no == 1
+                || batch_no.is_multiple_of(progress_every)
+                || batch_no == total_batches)
+        {
+            eprintln!(
+                "wikidata_getentities_progress\tbatch={}/{}\tqids={}\tmissing={}\tcached={}",
+                batch_no,
+                total_batches,
+                batch.len(),
+                missing_entities,
+                batch.len() - missing_entities
+            );
+        }
         let entities = cache.get_entities(&agent, batch, sleep)?;
         for (qid, entity) in entities {
             for (lang, label) in entity.labels {
@@ -118,6 +178,7 @@ pub(super) fn run_build(args: VariantsBuildArgs) -> Result<()> {
     }
 
     cache.store(&args.cache_path)?;
+    eprintln!("wikidata_cache_stored\tpath={}", args.cache_path.display());
 
     println!(
         "wikidata_matches\tconcepts_considered={}\tmatched_qids={}\tconcept_matches={}",
