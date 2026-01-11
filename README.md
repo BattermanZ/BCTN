@@ -36,3 +36,18 @@ cargo run --release -- variants build --db data/bctn.sqlite --max-concepts 1000 
 # to refresh the on-disk cache:
 cargo run --release -- variants build --db data/bctn.sqlite --refresh-cache
 ```
+
+## Variant edges (Ensemble scoring)
+
+Build variant edges using an ensemble of signals (string distance, within-country trend correlation, sex agreement, collision penalties) with optional Wikidata auto-accept when both concepts map to the same QID:
+
+```sh
+# run globally (ALL countries)
+cargo run --release -- variants build-ensemble --db data/bctn.sqlite
+
+# run for a single country and keep it fast
+cargo run --release -- variants build-ensemble --db data/bctn.sqlite --country FR --max-concepts 2000 --min-total 20
+
+# delete previously-generated ensemble edges and rebuild
+cargo run --release -- variants build-ensemble --db data/bctn.sqlite --clear-ensemble
+```

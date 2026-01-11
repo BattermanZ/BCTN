@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Debug, Parser)]
 #[command(name = "bctn", version)]
@@ -36,6 +36,7 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum VariantsCommand {
     Build(VariantsBuildArgs),
+    BuildEnsemble(VariantsBuildEnsembleArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -117,6 +118,36 @@ struct VariantsBuildArgs {
     no_clear: bool,
 }
 
+#[derive(Debug, Parser)]
+struct VariantsBuildEnsembleArgs {
+    #[arg(long, default_value = "data/bctn.sqlite")]
+    db: PathBuf,
+
+    #[arg(long, default_value = "ALL")]
+    country: String,
+
+    #[arg(long, default_value_t = 50)]
+    min_total: i64,
+
+    #[arg(long, default_value_t = 20000)]
+    max_concepts: u32,
+
+    #[arg(long, default_value_t = 2)]
+    max_edit_distance: usize,
+
+    #[arg(long, default_value_t = 8)]
+    min_years_nonzero: usize,
+
+    #[arg(long, default_value_t = 0.98)]
+    accept_threshold: f64,
+
+    #[arg(long, default_value_t = 0.85)]
+    propose_threshold: f64,
+
+    #[arg(long)]
+    clear_ensemble: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Country {
     Us,
@@ -164,6 +195,7 @@ fn main() -> Result<()> {
         Command::Top(args) => run_top(args),
         Command::Variants { command } => match command {
             VariantsCommand::Build(args) => run_variants_build(args),
+            VariantsCommand::BuildEnsemble(args) => run_variants_build_ensemble(args),
         },
     }
 }
@@ -530,6 +562,565 @@ fn run_variants_build(args: VariantsBuildArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_variants_build_ensemble(args: VariantsBuildEnsembleArgs) -> Result<()> {
+    if args.max_edit_distance == 0 {
+        bail!("max_edit_distance must be > 0");
+    }
+    if !(0.0..=1.0).contains(&args.accept_threshold)
+        || !(0.0..=1.0).contains(&args.propose_threshold)
+    {
+        bail!("thresholds must be between 0 and 1");
+    }
+    if args.propose_threshold > args.accept_threshold {
+        bail!("propose_threshold must be <= accept_threshold");
+    }
+
+    let mut conn = Connection::open(&args.db)
+        .with_context(|| format!("open sqlite db {db:?}", db = args.db))?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(include_str!("schema_indexes.sql"))?;
+
+    let countries: Vec<&str> = match args.country.as_str() {
+        "ALL" => vec!["US", "FR", "CL"],
+        "US" => vec!["US"],
+        "FR" => vec!["FR"],
+        "CL" => vec!["CL"],
+        other => bail!("unknown country {other:?}; expected ALL|US|FR|CL"),
+    };
+
+    let tx = conn.transaction()?;
+    if args.clear_ensemble {
+        tx.execute(
+            "DELETE FROM name_variant_edge WHERE method = 'ensemble'",
+            [],
+        )?;
+    }
+
+    #[derive(Debug, Clone)]
+    struct EdgeAggregate {
+        score: f64,
+        status: &'static str,
+        shared_qid: bool,
+        countries: serde_json::Map<String, serde_json::Value>,
+    }
+
+    impl EdgeAggregate {
+        fn new() -> Self {
+            Self {
+                score: 0.0,
+                status: "proposed",
+                shared_qid: false,
+                countries: serde_json::Map::new(),
+            }
+        }
+
+        fn update(&mut self, country: &str, score: f64, status: &'static str, evidence: Value) {
+            if self.shared_qid {
+                self.countries.insert(country.to_owned(), evidence);
+                return;
+            }
+
+            self.score = self.score.max(score);
+            if self.status != "accepted" && status == "accepted" {
+                self.status = "accepted";
+            } else if self.status == "proposed" && status == "proposed" {
+                // no-op
+            }
+            self.countries.insert(country.to_owned(), evidence);
+        }
+
+        fn update_shared_qid(&mut self, country: &str, evidence: Value) {
+            self.shared_qid = true;
+            self.score = 1.0;
+            self.status = "accepted";
+            self.countries.insert(country.to_owned(), evidence);
+        }
+
+        fn to_evidence_json(&self) -> Value {
+            json!({
+                "wikidata": {"shared_qid": self.shared_qid},
+                "countries": self.countries,
+            })
+        }
+    }
+
+    let mut aggregates: HashMap<(i64, i64), EdgeAggregate> = HashMap::new();
+
+    for country in countries {
+        let concepts = load_country_concepts(&tx, country, args.min_total, args.max_concepts)?;
+        println!(
+            "ensemble_candidates_loaded\tcountry={country}\tconcepts={}",
+            concepts.len()
+        );
+
+        if concepts.len() < 2 {
+            continue;
+        }
+
+        tx.execute_batch("DROP TABLE IF EXISTS tmp_concept")?;
+        tx.execute_batch("CREATE TEMP TABLE tmp_concept (id INTEGER PRIMARY KEY)")?;
+        {
+            let mut ins = tx.prepare("INSERT INTO tmp_concept(id) VALUES (?1)")?;
+            for c in &concepts {
+                ins.execute(params![c.concept_id])?;
+            }
+        }
+
+        let series = load_country_year_series(&tx, country)?;
+        let sex = load_country_sex_totals(&tx, country)?;
+        let global_country_totals = load_country_totals_all_countries(&tx)?;
+        let qids = load_country_concept_qids(&tx)?;
+
+        let blocks = build_blocks_by_prefix(&concepts);
+
+        for ids in blocks.values() {
+            if ids.len() < 2 {
+                continue;
+            }
+            for i in 0..ids.len() {
+                for j in (i + 1)..ids.len() {
+                    let a = &concepts[ids[i]];
+                    let b = &concepts[ids[j]];
+                    if a.concept_key
+                        .chars()
+                        .count()
+                        .abs_diff(b.concept_key.chars().count())
+                        > args.max_edit_distance
+                    {
+                        continue;
+                    }
+
+                    let Some(dist) =
+                        levenshtein_bounded(&a.concept_key, &b.concept_key, args.max_edit_distance)
+                    else {
+                        continue;
+                    };
+
+                    let string_score = string_score_from_distance(dist);
+                    if string_score < 0.80 {
+                        continue;
+                    }
+
+                    let shared_qid = concepts_share_qid_from_map(&qids, a.concept_id, b.concept_id);
+                    if shared_qid {
+                        let evidence = json!({
+                            "string": {"a": a.concept_key, "b": b.concept_key, "edit_distance": dist},
+                            "wikidata": {"shared_qid": true}
+                        });
+                        let key = (
+                            a.concept_id.min(b.concept_id),
+                            a.concept_id.max(b.concept_id),
+                        );
+                        aggregates
+                            .entry(key)
+                            .or_insert_with(EdgeAggregate::new)
+                            .update_shared_qid(country, evidence);
+                        continue;
+                    }
+
+                    let (trend_score, corr_opt, years_overlap, magnitude_score, magnitude_ratio) =
+                        trend_correlation_score(
+                            &series,
+                            a.concept_id,
+                            b.concept_id,
+                            args.min_years_nonzero,
+                        );
+                    let sex_score = sex_agreement_score(&sex, a.concept_id, b.concept_id);
+                    let collision =
+                        collision_info(&global_country_totals, a.concept_id, b.concept_id, dist);
+
+                    let mut ensemble = 0.45 * string_score + 0.40 * trend_score + 0.15 * sex_score;
+                    ensemble = (ensemble - collision.penalty).clamp(0.0, 1.0);
+
+                    let extremely_common_one_edit =
+                        dist == 1 && collision.a_total >= 50_000 && collision.b_total >= 50_000;
+
+                    let status = if ensemble >= args.accept_threshold
+                        && trend_score >= 0.95
+                        && string_score >= 0.93
+                        && sex_score >= 0.80
+                        && !extremely_common_one_edit
+                    {
+                        "accepted"
+                    } else if ensemble >= args.propose_threshold {
+                        "proposed"
+                    } else {
+                        continue;
+                    };
+
+                    let evidence = json!({
+                        "decision": {"status": status, "score": ensemble},
+                        "string": {"a": a.concept_key, "b": b.concept_key, "edit_distance": dist, "string_score": string_score},
+                        "trend": {"corr": corr_opt, "years_overlap": years_overlap, "trend_score": trend_score, "magnitude_score": magnitude_score, "magnitude_ratio": magnitude_ratio},
+                        "sex": {"sex_score": sex_score},
+                        "collision": {"penalty": collision.penalty, "a_total": collision.a_total, "b_total": collision.b_total, "a_countries_ge_100": collision.a_countries_ge_100, "b_countries_ge_100": collision.b_countries_ge_100},
+                        "names": {"a_preferred": a.preferred, "b_preferred": b.preferred}
+                    });
+
+                    let key = (
+                        a.concept_id.min(b.concept_id),
+                        a.concept_id.max(b.concept_id),
+                    );
+                    aggregates
+                        .entry(key)
+                        .or_insert_with(EdgeAggregate::new)
+                        .update(country, ensemble, status, evidence);
+                }
+            }
+        }
+    }
+
+    let mut upsert = tx.prepare(
+        "INSERT INTO name_variant_edge
+         (from_concept_id, to_concept_id, method, score, status, evidence_json, created_at, updated_at)
+         VALUES (?1, ?2, 'ensemble', ?3, ?4, ?5, ?6, ?6)
+         ON CONFLICT(from_concept_id, to_concept_id, method) DO UPDATE SET
+           score = excluded.score,
+           status = excluded.status,
+           evidence_json = excluded.evidence_json,
+           updated_at = excluded.updated_at",
+    )?;
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    let mut edges_written = 0i64;
+    for ((from, to), agg) in aggregates {
+        let evidence_json = agg.to_evidence_json();
+        edges_written += upsert.execute(params![
+            from,
+            to,
+            agg.score,
+            agg.status,
+            evidence_json.to_string(),
+            now
+        ])? as i64;
+    }
+
+    drop(upsert);
+    println!("ensemble_edges_written\tcount={edges_written}");
+
+    tx.commit()?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct CountryConcept {
+    concept_id: i64,
+    concept_key: String,
+    preferred: String,
+}
+
+fn load_country_concepts(
+    conn: &Connection,
+    country: &str,
+    min_total: i64,
+    max_concepts: u32,
+) -> Result<Vec<CountryConcept>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+           c.id,
+           c.concept_key,
+           ns.display,
+           SUM(o.count) AS total
+         FROM name_concept c
+         JOIN name_string ns ON ns.id = c.preferred_name_string_id
+         JOIN name_concept_member m ON m.concept_id = c.id
+         JOIN name_observation o ON o.name_string_id = m.name_string_id
+         WHERE o.country = ?1
+         GROUP BY c.id
+         HAVING total >= ?2
+         ORDER BY total DESC
+         LIMIT ?3",
+    )?;
+
+    let mut rows = stmt.query(params![country, min_total, max_concepts])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(CountryConcept {
+            concept_id: row.get(0)?,
+            concept_key: row.get(1)?,
+            preferred: row.get(2)?,
+        });
+    }
+    Ok(out)
+}
+
+type YearSeries = HashMap<(i64, i32), i64>;
+type SexTotals = HashMap<(i64, String), i64>;
+type CountryTotalsAll = HashMap<(i64, String), i64>;
+
+fn load_country_year_series(conn: &Connection, country: &str) -> Result<YearSeries> {
+    let mut stmt = conn.prepare(
+        "SELECT tc.id, o.year, SUM(o.count)
+         FROM tmp_concept tc
+         JOIN name_concept_member m ON m.concept_id = tc.id
+         JOIN name_observation o ON o.name_string_id = m.name_string_id
+         WHERE o.country = ?1
+         GROUP BY tc.id, o.year",
+    )?;
+    let mut rows = stmt.query(params![country])?;
+    let mut out = YearSeries::new();
+    while let Some(row) = rows.next()? {
+        let concept_id: i64 = row.get(0)?;
+        let year: i32 = row.get(1)?;
+        let total: i64 = row.get(2)?;
+        out.insert((concept_id, year), total);
+    }
+    Ok(out)
+}
+
+fn load_country_sex_totals(conn: &Connection, country: &str) -> Result<SexTotals> {
+    let mut stmt = conn.prepare(
+        "SELECT tc.id, o.sex, SUM(o.count)
+         FROM tmp_concept tc
+         JOIN name_concept_member m ON m.concept_id = tc.id
+         JOIN name_observation o ON o.name_string_id = m.name_string_id
+         WHERE o.country = ?1
+         GROUP BY tc.id, o.sex",
+    )?;
+    let mut rows = stmt.query(params![country])?;
+    let mut out = SexTotals::new();
+    while let Some(row) = rows.next()? {
+        let concept_id: i64 = row.get(0)?;
+        let sex: String = row.get(1)?;
+        let total: i64 = row.get(2)?;
+        out.insert((concept_id, sex), total);
+    }
+    Ok(out)
+}
+
+fn load_country_totals_all_countries(conn: &Connection) -> Result<CountryTotalsAll> {
+    let mut stmt = conn.prepare(
+        "SELECT tc.id, o.country, SUM(o.count)
+         FROM tmp_concept tc
+         JOIN name_concept_member m ON m.concept_id = tc.id
+         JOIN name_observation o ON o.name_string_id = m.name_string_id
+         GROUP BY tc.id, o.country",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = CountryTotalsAll::new();
+    while let Some(row) = rows.next()? {
+        let concept_id: i64 = row.get(0)?;
+        let country: String = row.get(1)?;
+        let total: i64 = row.get(2)?;
+        out.insert((concept_id, country), total);
+    }
+    Ok(out)
+}
+
+fn build_blocks_by_prefix(concepts: &[CountryConcept]) -> HashMap<String, Vec<usize>> {
+    let mut blocks: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, c) in concepts.iter().enumerate() {
+        let prefix: String = c.concept_key.chars().take(2).collect();
+        blocks.entry(prefix).or_default().push(idx);
+    }
+    blocks
+}
+
+fn string_score_from_distance(dist: usize) -> f64 {
+    match dist {
+        0 => 1.0,
+        1 => 0.98,
+        2 => 0.93,
+        3 => 0.88,
+        _ => 0.0,
+    }
+}
+
+fn trend_correlation_score(
+    series: &YearSeries,
+    a: i64,
+    b: i64,
+    min_years_nonzero: usize,
+) -> (f64, Option<f64>, usize, f64, Option<f64>) {
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    let mut years = 0usize;
+    for year in 2005..=2024 {
+        let av = series.get(&(a, year)).copied().unwrap_or(0);
+        let bv = series.get(&(b, year)).copied().unwrap_or(0);
+        if av > 0 && bv > 0 {
+            xs.push(av as f64);
+            ys.push(bv as f64);
+            years += 1;
+        }
+    }
+    if years < min_years_nonzero {
+        return (0.0, None, years, 0.0, None);
+    }
+
+    let corr = pearson_corr(&xs, &ys).unwrap_or(0.0).clamp(-1.0, 1.0);
+    let sum_x: f64 = xs.iter().sum();
+    let sum_y: f64 = ys.iter().sum();
+    let ratio = if sum_x > 0.0 && sum_y > 0.0 {
+        Some(sum_x / sum_y)
+    } else {
+        None
+    };
+    let magnitude_score = ratio
+        .map(|r| (1.0 - (r.ln().abs() / 2.0_f64.ln())).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let score = corr.max(0.0) * magnitude_score;
+    (score, Some(corr), years, magnitude_score, ratio)
+}
+
+fn pearson_corr(xs: &[f64], ys: &[f64]) -> Option<f64> {
+    if xs.len() != ys.len() || xs.is_empty() {
+        return None;
+    }
+    let n = xs.len() as f64;
+    let mean_x = xs.iter().sum::<f64>() / n;
+    let mean_y = ys.iter().sum::<f64>() / n;
+    let mut num = 0.0;
+    let mut den_x = 0.0;
+    let mut den_y = 0.0;
+    for i in 0..xs.len() {
+        let dx = xs[i] - mean_x;
+        let dy = ys[i] - mean_y;
+        num += dx * dy;
+        den_x += dx * dx;
+        den_y += dy * dy;
+    }
+    let den = (den_x * den_y).sqrt();
+    if den == 0.0 { None } else { Some(num / den) }
+}
+
+fn sex_agreement_score(sex: &SexTotals, a: i64, b: i64) -> f64 {
+    let am = sex.get(&(a, "M".to_owned())).copied().unwrap_or(0);
+    let af = sex.get(&(a, "F".to_owned())).copied().unwrap_or(0);
+    let bm = sex.get(&(b, "M".to_owned())).copied().unwrap_or(0);
+    let bf = sex.get(&(b, "F".to_owned())).copied().unwrap_or(0);
+    let at = (am + af) as f64;
+    let bt = (bm + bf) as f64;
+    if at == 0.0 || bt == 0.0 {
+        return 0.5;
+    }
+    let pa = (am as f64) / at;
+    let pb = (bm as f64) / bt;
+    let diff = (pa - pb).abs();
+    (1.0 - (diff / 0.25)).clamp(0.0, 1.0)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CollisionInfo {
+    penalty: f64,
+    a_total: i64,
+    b_total: i64,
+    a_countries_ge_100: i32,
+    b_countries_ge_100: i32,
+}
+
+fn collision_info(totals: &CountryTotalsAll, a: i64, b: i64, dist: usize) -> CollisionInfo {
+    let mut a_countries_ge_100 = 0i32;
+    let mut b_countries_ge_100 = 0i32;
+    let mut a_total = 0i64;
+    let mut b_total = 0i64;
+    for country in ["US", "FR", "CL"] {
+        let av = totals.get(&(a, country.to_owned())).copied().unwrap_or(0);
+        let bv = totals.get(&(b, country.to_owned())).copied().unwrap_or(0);
+        a_total += av;
+        b_total += bv;
+        if av >= 100 {
+            a_countries_ge_100 += 1;
+        }
+        if bv >= 100 {
+            b_countries_ge_100 += 1;
+        }
+    }
+    let mut penalty = 0.0;
+    if (a_countries_ge_100 - b_countries_ge_100).abs() >= 2 {
+        penalty += 0.05;
+    }
+    if dist == 1 && a_total >= 50_000 && b_total >= 50_000 {
+        penalty += 0.10;
+    }
+    CollisionInfo {
+        penalty,
+        a_total,
+        b_total,
+        a_countries_ge_100,
+        b_countries_ge_100,
+    }
+}
+
+type ConceptQids = HashMap<i64, Vec<String>>;
+
+fn load_country_concept_qids(conn: &Connection) -> Result<ConceptQids> {
+    let mut stmt = conn.prepare(
+        "SELECT tc.id, w.qid
+         FROM tmp_concept tc
+         JOIN wikidata_concept_match w ON w.concept_id = tc.id",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out: ConceptQids = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let concept_id: i64 = row.get(0)?;
+        let qid: String = row.get(1)?;
+        out.entry(concept_id).or_default().push(qid);
+    }
+    Ok(out)
+}
+
+fn concepts_share_qid_from_map(qids: &ConceptQids, a: i64, b: i64) -> bool {
+    let Some(aq) = qids.get(&a) else { return false };
+    let Some(bq) = qids.get(&b) else { return false };
+    if aq.len() <= bq.len() {
+        for q in aq {
+            if bq.iter().any(|x| x == q) {
+                return true;
+            }
+        }
+    } else {
+        for q in bq {
+            if aq.iter().any(|x| x == q) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn levenshtein_bounded(a: &str, b: &str, max: usize) -> Option<usize> {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let len_a = a.len();
+    let len_b = b.len();
+    if len_a.abs_diff(len_b) > max {
+        return None;
+    }
+    if len_a == 0 {
+        return (len_b <= max).then_some(len_b);
+    }
+    if len_b == 0 {
+        return (len_a <= max).then_some(len_a);
+    }
+
+    let mut prev: Vec<usize> = (0..=len_b).collect();
+    let mut curr: Vec<usize> = vec![0; len_b + 1];
+
+    for i in 1..=len_a {
+        curr[0] = i;
+        let mut row_min = curr[0];
+        for j in 1..=len_b {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            let del = prev[j] + 1;
+            let ins = curr[j - 1] + 1;
+            let sub = prev[j - 1] + cost;
+            let v = del.min(ins).min(sub);
+            curr[j] = v;
+            row_min = row_min.min(v);
+        }
+        if row_min > max {
+            return None;
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    let dist = prev[len_b];
+    (dist <= max).then_some(dist)
+}
+
 #[derive(Debug, Clone)]
 struct ConceptRow {
     concept_id: i64,
@@ -628,6 +1219,33 @@ fn load_qid_to_concepts(conn: &Connection) -> Result<HashMap<String, Vec<i64>>> 
         ids.dedup();
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod ensemble_tests {
+    use super::*;
+
+    #[test]
+    fn levenshtein_bounded_basic_cases() {
+        assert_eq!(levenshtein_bounded("AYMERIC", "AYMERIC", 2), Some(0));
+        assert_eq!(levenshtein_bounded("kitten", "sitting", 2), None);
+        assert_eq!(levenshtein_bounded("kitten", "sitting", 3), Some(3));
+        assert_eq!(levenshtein_bounded("", "abc", 2), None);
+        assert_eq!(levenshtein_bounded("", "abc", 3), Some(3));
+    }
+
+    #[test]
+    fn pearson_corr_edge_cases() {
+        let corr = pearson_corr(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]).unwrap();
+        assert!((corr - 1.0).abs() < 1e-12);
+
+        let corr = pearson_corr(&[1.0, 2.0, 3.0], &[3.0, 2.0, 1.0]).unwrap();
+        assert!((corr + 1.0).abs() < 1e-12);
+
+        assert_eq!(pearson_corr(&[1.0, 1.0, 1.0], &[2.0, 3.0, 4.0]), None);
+        assert_eq!(pearson_corr(&[], &[]), None);
+        assert_eq!(pearson_corr(&[1.0], &[1.0, 2.0]), None);
+    }
 }
 
 #[derive(Debug)]
