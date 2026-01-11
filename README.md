@@ -25,3 +25,14 @@ cargo run --release -- show abdallah
 # top names by country/year
 cargo run --release -- top --country US --year 2024 --limit 25
 ```
+
+## Variant edges (Wikidata)
+
+Build automatic variant edges (global edges with per-country evidence):
+
+```sh
+cargo run --release -- variants build --db data/bctn.sqlite --max-concepts 1000 --batch-size 50 --request-sleep-ms 500
+
+# to refresh the on-disk cache:
+cargo run --release -- variants build --db data/bctn.sqlite --refresh-cache
+```

@@ -51,3 +51,24 @@ CREATE TABLE IF NOT EXISTS name_observation (
   count INTEGER NOT NULL,
   proportion REAL
 );
+
+CREATE TABLE IF NOT EXISTS wikidata_concept_match (
+  concept_id INTEGER NOT NULL REFERENCES name_concept(id) ON DELETE CASCADE,
+  qid TEXT NOT NULL,
+  matched_label TEXT NOT NULL,
+  matched_label_lang TEXT,
+  PRIMARY KEY (concept_id, qid, matched_label)
+);
+
+CREATE TABLE IF NOT EXISTS name_variant_edge (
+  id INTEGER PRIMARY KEY,
+  from_concept_id INTEGER NOT NULL REFERENCES name_concept(id) ON DELETE CASCADE,
+  to_concept_id INTEGER NOT NULL REFERENCES name_concept(id) ON DELETE CASCADE,
+  method TEXT NOT NULL,
+  score REAL NOT NULL,
+  status TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (from_concept_id, to_concept_id, method)
+);

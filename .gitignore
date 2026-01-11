@@ -1,6 +1,7 @@
 /target/
 /data/*.sqlite
+/data/wikidata_cache.json
+/data/wikidata_cache.json.tmp
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
-
