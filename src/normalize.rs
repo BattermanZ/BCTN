@@ -12,7 +12,7 @@ pub fn key_folded(key_strict: &str) -> String {
     key_strict
         .nfkd()
         .filter(|&ch| !is_combining_mark(ch))
-        .filter(|ch| ch.is_alphanumeric())
+        .filter(|ch| ch.is_alphanumeric() || *ch == '-')
         .collect()
 }
 
@@ -47,8 +47,11 @@ mod tests {
         let norm = norm_display("ABD'ALLAH");
         assert_eq!(key_folded(&key_strict(&norm)), "abdallah");
 
+        let norm = norm_display("ABD-ALLAH");
+        assert_eq!(key_folded(&key_strict(&norm)), "abd-allah");
+
         let norm = norm_display("Anne-Marie");
-        assert_eq!(key_folded(&key_strict(&norm)), "annemarie");
+        assert_eq!(key_folded(&key_strict(&norm)), "anne-marie");
     }
 
     #[test]

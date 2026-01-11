@@ -13,7 +13,7 @@ cargo run --release -- ingest --out data/bctn.sqlite --start-year 2005 --end-yea
 ## Browse/search (CLI)
 
 ```sh
-# search by folded key (case/accents/punctuation folded)
+# search by folded key (case/accents/apostrophes folded; hyphens preserved)
 cargo run --release -- search jose
 
 # substring search (slower)
