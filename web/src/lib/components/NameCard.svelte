@@ -99,10 +99,8 @@
       </div>
     </div>
 
-    <div class="flex flex-1 flex-col items-center justify-center text-center">
-      <div class="text-5xl font-semibold tracking-tight text-zinc-900">{card.display_name}</div>
-
-      <div class="mt-4 flex flex-wrap justify-center gap-2">
+    <div class="flex flex-1 flex-col items-center text-center">
+      <div class="mt-1 flex flex-wrap justify-center gap-2">
         {#each card.spellings_preview.slice(0, 3) as spelling (spelling)}
           <span
             class="rounded-full border border-zinc-200 bg-white/80 px-3 py-1 text-xs font-medium text-zinc-700"
@@ -112,11 +110,17 @@
         {/each}
       </div>
 
-      {#if showLastName}
-        <div class="mt-10 text-lg font-medium text-zinc-600">
-          {`${card.display_name} ${lastName}`.trim()}
+      <div class="flex flex-1 flex-col items-center justify-center">
+        <div class="text-5xl font-semibold tracking-tight text-zinc-900">
+          {card.display_name}
         </div>
-      {/if}
+
+        {#if showLastName}
+          <div class="mt-10 text-lg font-medium text-zinc-600">
+            {`${card.display_name} ${lastName}`.trim()}
+          </div>
+        {/if}
+      </div>
     </div>
 
     <div class="flex flex-wrap items-center justify-center gap-2 pt-2">

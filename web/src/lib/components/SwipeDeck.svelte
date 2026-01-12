@@ -409,21 +409,21 @@
       </button>
       <button
         type="button"
-        class="flex items-center justify-center rounded-full border border-teal-200 bg-teal-50 px-4 py-3 text-teal-800 shadow-sm hover:bg-teal-100 disabled:opacity-50"
-        onclick={() => commitSwipeWithMomentum('like', { startDx: 0, startDy: 0 })}
-        disabled={!canSwipe()}
-      >
-        <span class="sr-only">Like</span>
-        <Icon name="likes" size={24} />
-      </button>
-      <button
-        type="button"
         class="flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 shadow-sm hover:bg-amber-100 disabled:opacity-50"
         onclick={() => commitSwipeWithMomentum('superlike', { startDx: 0, startDy: 0 })}
         disabled={!canSwipe()}
       >
         <span class="sr-only">Super-like</span>
         <Icon name="sparkle" size={24} />
+      </button>
+      <button
+        type="button"
+        class="flex items-center justify-center rounded-full border border-teal-200 bg-teal-50 px-4 py-3 text-teal-800 shadow-sm hover:bg-teal-100 disabled:opacity-50"
+        onclick={() => commitSwipeWithMomentum('like', { startDx: 0, startDy: 0 })}
+        disabled={!canSwipe()}
+      >
+        <span class="sr-only">Like</span>
+        <Icon name="likes" size={24} />
       </button>
     </div>
   </div>
