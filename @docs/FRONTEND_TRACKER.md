@@ -36,14 +36,18 @@ This document tracks frontend decisions, open questions, and implementation chec
 
 ## Core Screens (Planned)
 
-- Login
-- Swipe deck
-- Detail sheet (name stats + spellings)
-- Matches
-- Likes (shared)
-- Super-likes (shared) + personal view (TBD)
-- Filters + settings
-- Admin (accounts management)
+Status legend: ✅ mock UI, 🔌 wired to backend, ⏳ planned
+
+- ⏳ Login
+- ✅ Swipe deck
+- ✅ Detail sheet (bottom sheet: spellings + per-country stats + last-5-years ranks if available)
+- ✅ Matches
+- ✅ Likes (shared)
+- ⏳ Super-likes (shared) + personal view (TBD)
+- ✅ Filters + settings
+- ✅ Admin (accounts management, mock)
+
+Implementation note (2026-01-12): screens are currently mock-only (dummy data + local stores), not wired to `/api/*` yet.
 
 ## Swipe Deck UX (Requirements)
 
