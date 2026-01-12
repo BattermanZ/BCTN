@@ -536,12 +536,12 @@ async fn spellings_preview(
                 FROM name_concept nc
                 JOIN name_concept_member ncm ON ncm.concept_id = nc.id
                 JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                WHERE nc.concept_key = ?1
-                  AND no.run_id = ?2
+                WHERE nc.concept_key = ?
+                  AND no.run_id = ?
                   AND no.country IN ({placeholders})
                 GROUP BY no.name_raw
                 ORDER BY SUM(no.count) DESC
-                LIMIT ?3
+                LIMIT ?
                 "#
             ),
             CardKind::Group => format!(
@@ -550,17 +550,17 @@ async fn spellings_preview(
                   SELECT nc.id AS id
                   FROM variant_group_member vgm
                   JOIN name_concept nc ON nc.concept_key = vgm.concept_key
-                  WHERE vgm.variant_group_key = ?1
+                  WHERE vgm.variant_group_key = ?
                 )
                 SELECT no.name_raw AS name_raw
                 FROM name_concept_member ncm
                 JOIN name_observation no ON no.name_string_id = ncm.name_string_id
                 WHERE ncm.concept_id IN (SELECT id FROM concept_ids)
-                  AND no.run_id = ?2
+                  AND no.run_id = ?
                   AND no.country IN ({placeholders})
                 GROUP BY no.name_raw
                 ORDER BY SUM(no.count) DESC
-                LIMIT ?3
+                LIMIT ?
                 "#
             ),
         };
@@ -571,7 +571,13 @@ async fn spellings_preview(
         for c in countries {
             q = q.bind(*c);
         }
-        let out = q.bind(n).fetch_all(&state.names_db).await?;
+        let out = q
+            .bind(n)
+            .fetch_all(&state.names_db)
+            .await
+            .with_context(|| {
+                format!("spellings global top n kind={:?} card_key={card_key}", kind)
+            })?;
         Ok(out)
     }
 
@@ -594,8 +600,8 @@ async fn spellings_preview(
                   FROM name_concept nc
                   JOIN name_concept_member ncm ON ncm.concept_id = nc.id
                   JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                  WHERE nc.concept_key = ?1
-                    AND no.run_id = ?2
+                  WHERE nc.concept_key = ?
+                    AND no.run_id = ?
                     AND no.country IN ({placeholders})
                   GROUP BY no.country, no.name_raw
                 ),
@@ -616,7 +622,7 @@ async fn spellings_preview(
                   SELECT nc.id AS id
                   FROM variant_group_member vgm
                   JOIN name_concept nc ON nc.concept_key = vgm.concept_key
-                  WHERE vgm.variant_group_key = ?1
+                  WHERE vgm.variant_group_key = ?
                 ),
                 spellings AS (
                   SELECT
@@ -626,7 +632,7 @@ async fn spellings_preview(
                   FROM name_concept_member ncm
                   JOIN name_observation no ON no.name_string_id = ncm.name_string_id
                   WHERE ncm.concept_id IN (SELECT id FROM concept_ids)
-                    AND no.run_id = ?2
+                    AND no.run_id = ?
                     AND no.country IN ({placeholders})
                   GROUP BY no.country, no.name_raw
                 ),
@@ -647,7 +653,12 @@ async fn spellings_preview(
         for c in countries {
             q = q.bind(*c);
         }
-        let rows = q.fetch_all(&state.names_db).await?;
+        let rows = q.fetch_all(&state.names_db).await.with_context(|| {
+            format!(
+                "spellings top1 per country kind={:?} card_key={card_key}",
+                kind
+            )
+        })?;
         let mut out = Vec::new();
         for r in rows {
             out.push((
