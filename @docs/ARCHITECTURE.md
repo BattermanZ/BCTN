@@ -5,7 +5,7 @@ This document proposes a concrete architecture for the Tinder-like baby-name mat
 ## High-level Components
 
 - **Names DB (existing):** `data/bctn.sqlite`
-  - Built via `bctn ingest` + variant link generation via `bctn variants build` and `bctn variants build-ensemble`.
+  - Built via `bctn-ingest ingest` + variant link generation via `bctn-ingest variants build` and `bctn-ingest variants build-ensemble`.
   - Contains name concepts, yearly observations, and `name_variant_edge` links.
   - Rebuildable (idempotent ingest currently recreates the file), so it should not store user accounts/swipes.
 

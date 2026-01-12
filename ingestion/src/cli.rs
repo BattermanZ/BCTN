@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "bctn", version)]
+#[command(name = "bctn-ingest", version)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
