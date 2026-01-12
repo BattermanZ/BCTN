@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from '$lib/components/BottomSheet.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import NameCard from '$lib/components/NameCard.svelte';
   import type { Card, CountryCode, SwipeAction } from '$lib/types';
   import { filters, settings, swipes } from '$lib/stores/app';
@@ -314,7 +315,7 @@
       </button>
     </div>
 
-    <div class="relative">
+    <div class="relative h-[62vh] min-h-[480px]">
       <!-- back -->
       {#if backCard}
         <div
@@ -327,6 +328,7 @@
             lastName={$settings.lastName}
             selectedCountries={$filters.countries}
             showScore={$settings.bestPickMode}
+            className="h-full"
           />
         </div>
       {/if}
@@ -343,6 +345,7 @@
             lastName={$settings.lastName}
             selectedCountries={$filters.countries}
             showScore={$settings.bestPickMode}
+            className="h-full"
           />
         </div>
       {/if}
@@ -370,6 +373,7 @@
           lastName={$settings.lastName}
           selectedCountries={$filters.countries}
           showScore={$settings.bestPickMode}
+          className="h-full"
         />
 
         {#if label.label}
@@ -392,27 +396,30 @@
     <div class="grid grid-cols-3 gap-3 pt-2">
       <button
         type="button"
-        class="rounded-full border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 shadow-sm hover:bg-rose-100 disabled:opacity-50"
+        class="flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-4 py-3 text-rose-800 shadow-sm hover:bg-rose-100 disabled:opacity-50"
         onclick={() => commitSwipeWithMomentum('nope', { startDx: 0, startDy: 0 })}
         disabled={!canSwipe()}
       >
-        Nope
+        <span class="sr-only">Nope</span>
+        <Icon name="x" size={24} />
       </button>
       <button
         type="button"
-        class="rounded-full border border-teal-200 bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-800 shadow-sm hover:bg-teal-100 disabled:opacity-50"
+        class="flex items-center justify-center rounded-full border border-teal-200 bg-teal-50 px-4 py-3 text-teal-800 shadow-sm hover:bg-teal-100 disabled:opacity-50"
         onclick={() => commitSwipeWithMomentum('like', { startDx: 0, startDy: 0 })}
         disabled={!canSwipe()}
       >
-        Like
+        <span class="sr-only">Like</span>
+        <Icon name="likes" size={24} />
       </button>
       <button
         type="button"
-        class="rounded-full border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 shadow-sm hover:bg-amber-100 disabled:opacity-50"
+        class="flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 shadow-sm hover:bg-amber-100 disabled:opacity-50"
         onclick={() => commitSwipeWithMomentum('superlike', { startDx: 0, startDy: 0 })}
         disabled={!canSwipe()}
       >
-        Super
+        <span class="sr-only">Super-like</span>
+        <Icon name="sparkle" size={24} />
       </button>
     </div>
   </div>

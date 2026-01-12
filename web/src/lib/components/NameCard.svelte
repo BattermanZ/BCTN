@@ -8,6 +8,7 @@
     lastName?: string;
     selectedCountries?: CountryCode[];
     showScore?: boolean;
+    className?: string;
   };
 
   let {
@@ -16,6 +17,7 @@
     lastName = 'Zarca Wong',
     selectedCountries = ['US', 'FR', 'CL'] as CountryCode[],
     showScore = false,
+    className = '',
   }: Props = $props();
 
   function badgeForGender(label: GenderLabel) {
@@ -60,55 +62,56 @@
   const genderBadge = $derived(badgeForGender(gender.gender));
 </script>
 
-<div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm">
-  <div class="flex items-start justify-between gap-3">
-    <div class="min-w-0">
-      <div class="text-3xl font-semibold tracking-tight text-zinc-900">
-        {card.display_name}
+<div class={`rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm ${className}`}>
+  <div class="flex min-h-full flex-col">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <div class="text-4xl font-semibold tracking-tight text-zinc-900">{card.display_name}</div>
+        {#if showLastName}
+          <div class="mt-1 text-base font-medium text-zinc-600">
+            {`${card.display_name} ${lastName}`.trim()}
+          </div>
+        {:else}
+          <div class="mt-1 text-sm text-zinc-500">First name only</div>
+        {/if}
       </div>
-      {#if showLastName}
-        <div class="mt-1 text-sm text-zinc-500">
-          {card.display_name}
-          {lastName}
-        </div>
-      {:else}
-        <div class="mt-1 text-sm text-zinc-500">First name only</div>
+
+      {#if showScore && card.score !== undefined}
+        <Badge tone="amber" label={`Score ${card.score}`} />
       {/if}
     </div>
 
-    {#if showScore && card.score !== undefined}
-      <Badge tone="amber" label={`Score ${card.score}`} />
-    {/if}
-  </div>
+    <div class="mt-5 flex flex-wrap gap-2">
+      {#each card.spellings_preview.slice(0, 3) as spelling (spelling)}
+        <span
+          class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700"
+        >
+          {spelling}
+        </span>
+      {/each}
+    </div>
 
-  <div class="mt-4 flex flex-wrap gap-2">
-    {#each card.spellings_preview.slice(0, 3) as spelling (spelling)}
-      <span class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-sm text-zinc-700">
-        {spelling}
-      </span>
-    {/each}
-  </div>
-
-  <div class="mt-4 flex flex-wrap items-center gap-2">
-    <Badge tone={genderBadge.tone} label={genderBadge.label} />
-    {#if gender.note}
-      <span class="text-xs text-zinc-500">{gender.note}</span>
-    {/if}
-  </div>
-
-  <div class="mt-4 flex flex-wrap gap-2">
-    {#each card.per_country as c (c.country)}
-      {#if selectedCountries.includes(c.country)}
-        {@const r = latestRank(c.country)}
-        <Badge
-          tone={c.top100_any ? 'rose' : 'neutral'}
-          label={r ? `${c.country} #${r.rank}` : `${c.country} —`}
-        />
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <Badge tone={genderBadge.tone} label={genderBadge.label} />
+      {#if gender.note}
+        <span class="text-xs text-zinc-500">{gender.note}</span>
       {/if}
-    {/each}
-  </div>
+    </div>
 
-  <div class="mt-5 text-xs text-zinc-500">
-    Swipe right to Like • left to Nope • up to Super-like • tap for details
+    <div class="mt-4 flex flex-wrap gap-2">
+      {#each card.per_country as c (c.country)}
+        {#if selectedCountries.includes(c.country)}
+          {@const r = latestRank(c.country)}
+          <Badge
+            tone={c.top100_any ? 'rose' : 'neutral'}
+            label={r ? `${c.country} #${r.rank}` : `${c.country} —`}
+          />
+        {/if}
+      {/each}
+    </div>
+
+    <div class="mt-auto pt-4 text-[11px] text-zinc-400">
+      Swipe right to Like • left to Nope • up to Super-like • tap for details
+    </div>
   </div>
 </div>
