@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { currentUser } from '$lib/stores/app';
+  import { currentUser, partnerUser, settings } from '$lib/stores/app';
   import { goto } from '$app/navigation';
 
   let username = $state('');
@@ -14,6 +14,18 @@
     try {
       const me = await api.login(username.trim(), password);
       currentUser.set(me);
+
+      const users = await api.users();
+      const partner = users.find((u) => u.id !== me.id) ?? null;
+      partnerUser.set(partner);
+
+      const s = await api.getSettings();
+      settings.set({
+        showLastName: s.show_last_name,
+        lastName: s.last_name,
+        bestPickMode: s.best_pick_mode,
+      });
+
       await goto('/');
     } catch (e) {
       const msg = (e as Error | null)?.message ?? 'Login failed';
