@@ -113,7 +113,7 @@
       </div>
 
       {#if showLastName}
-        <div class="mt-10 text-base font-medium text-zinc-600">
+        <div class="mt-10 text-lg font-medium text-zinc-600">
           {`${card.display_name} ${lastName}`.trim()}
         </div>
       {/if}
