@@ -12,7 +12,8 @@ anyhow = "1.0.95"
 argon2 = "0.5.3"
 axum = { version = "0.7.9", features = ["macros", "json"] }
 axum-extra = { version = "0.9.6", features = ["cookie"] }
-clap = { version = "4.5.27", features = ["derive"] }
+clap = { version = "4.5.27", features = ["derive", "env"] }
+dotenvy = "0.15.7"
 hex = "0.4.3"
 rand = "0.8.5"
 serde = { version = "1.0.217", features = ["derive"] }

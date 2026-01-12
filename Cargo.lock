@@ -241,6 +241,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "clap",
+ "dotenvy",
  "hex",
  "rand",
  "serde",
