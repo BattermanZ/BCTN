@@ -3,6 +3,7 @@
   import NameCard from '$lib/components/NameCard.svelte';
   import type { Card, CountryCode, SwipeAction } from '$lib/types';
   import { filters, settings, swipes } from '$lib/stores/app';
+  import { tick } from 'svelte';
   import { fade } from 'svelte/transition';
 
   type Props = { cards: Card[] };
@@ -22,6 +23,7 @@
   const remaining = $derived(cards.length - index);
 
   let history = $state<string[]>([]);
+  let suppressTransition = $state(false);
 
   function resetDrag() {
     dragging = false;
@@ -102,8 +104,11 @@
     dragging = false;
 
     await new Promise((r) => setTimeout(r, 140));
+    suppressTransition = true;
     index = Math.min(index + 1, cards.length);
     resetDrag();
+    await tick();
+    suppressTransition = false;
   }
 
   function undo() {
@@ -163,23 +168,30 @@
     </div>
 
     <div class="relative">
-      <!-- next card placeholder -->
-      {#if cards[index + 1]}
-        <div class="pointer-events-none absolute inset-0 translate-y-2 scale-[0.98] opacity-60">
-          <NameCard
-            card={cards[index + 1]}
-            showLastName={$settings.showLastName}
-            lastName={$settings.lastName}
-            selectedCountries={$filters.countries}
-            showScore={$settings.bestPickMode}
-          />
-        </div>
-      {/if}
+      <!-- background stack -->
+      {#each [3, 2, 1] as depth (depth)}
+        {#if cards[index + depth]}
+          <div
+            class="pointer-events-none absolute inset-0"
+            style={`transform: translate3d(0, ${depth * 6}px, 0) scale(${1 - depth * 0.03}); opacity: ${
+              0.62 - depth * 0.14
+            };`}
+          >
+            <NameCard
+              card={cards[index + depth]}
+              showLastName={$settings.showLastName}
+              lastName={$settings.lastName}
+              selectedCountries={$filters.countries}
+              showScore={$settings.bestPickMode}
+            />
+          </div>
+        {/if}
+      {/each}
 
       <div
-        class="relative touch-pan-y"
+        class="relative touch-none"
         style={`transform: translate3d(${dx}px, ${dy}px, 0) rotate(${dx / 18}deg); transition: ${
-          dragging ? 'none' : 'transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1)'
+          dragging || suppressTransition ? 'none' : 'transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1)'
         };`}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}

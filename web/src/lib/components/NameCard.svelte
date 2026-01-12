@@ -50,10 +50,10 @@
     return { gender: first?.gender ?? 'unknown', note: undefined };
   }
 
-  function fmtPpm(ppm: number) {
-    if (ppm <= 0) return '—';
-    if (ppm >= 1000) return `${Math.round(ppm)}`;
-    return ppm.toFixed(0);
+  function latestRank(country: CountryCode): { year: number; rank: number } | undefined {
+    const ranks = card.last5_year_ranks?.[country];
+    if (!ranks || !ranks.length) return undefined;
+    return ranks.reduce((best, cur) => (cur.year > best.year ? cur : best));
   }
 
   const gender = $derived(genderForSelected());
@@ -103,9 +103,10 @@
   <div class="mt-4 flex flex-wrap gap-2">
     {#each card.per_country as c (c.country)}
       {#if selectedCountries.includes(c.country)}
+        {@const r = latestRank(c.country)}
         <Badge
           tone={c.top100_any ? 'rose' : 'neutral'}
-          label={`${c.country} ${fmtPpm(c.ppm)} ppm`}
+          label={r ? `${c.country} #${r.rank}` : `${c.country} —`}
         />
       {/if}
     {/each}
