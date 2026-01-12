@@ -32,6 +32,8 @@
   let animX = $state(0);
   let animY = $state(0);
   let rafId = $state<number | null>(null);
+  let promoteT = $state(1);
+  let promoteRafId = $state<number | null>(null);
 
   let history = $state<string[]>([]);
 
@@ -58,6 +60,35 @@
       rafId = null;
     }
   }
+
+  function startPromotion(durationMs: number) {
+    if (promoteRafId !== null) {
+      cancelAnimationFrame(promoteRafId);
+      promoteRafId = null;
+    }
+
+    const start = performance.now();
+    promoteT = 0;
+    const step = () => {
+      const t = Math.min(1, (performance.now() - start) / durationMs);
+      promoteT = 1 - Math.pow(1 - t, 3);
+      const done = t >= 1;
+      if (done) {
+        promoteT = 1;
+        promoteRafId = null;
+        return;
+      }
+      promoteRafId = requestAnimationFrame(step);
+    };
+    promoteRafId = requestAnimationFrame(step);
+  }
+
+  $effect(() => {
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      if (promoteRafId !== null) cancelAnimationFrame(promoteRafId);
+    };
+  });
 
   function onPointerDown(e: PointerEvent) {
     if (!topCard) return;
@@ -210,6 +241,7 @@
     samples = [];
 
     const target = targetForAction(action, animX, animY, vx, vy);
+    startPromotion(target.durationMs);
     await animateTo(target.x, target.y, target.durationMs);
 
     // advance the deck only after the top card has left the screen
@@ -284,7 +316,9 @@
       {#if backCard}
         <div
           class="pointer-events-none absolute inset-0 z-0"
-          style="transform: translate3d(0, 18px, 0) scale(0.94); opacity: 0.65;"
+          style={`transform: translate3d(0, ${18 - promoteT * 8}px, 0) scale(${0.94 + promoteT * 0.03}); opacity: ${
+            0.65 + promoteT * 0.15
+          };`}
         >
           <NameCard
             card={backCard}
@@ -300,7 +334,9 @@
       {#if midCard}
         <div
           class="pointer-events-none absolute inset-0 z-10"
-          style="transform: translate3d(0, 10px, 0) scale(0.97); opacity: 0.8;"
+          style={`transform: translate3d(0, ${10 - promoteT * 10}px, 0) scale(${0.97 + promoteT * 0.03}); opacity: ${
+            0.8 + promoteT * 0.2
+          };`}
         >
           <NameCard
             card={midCard}
