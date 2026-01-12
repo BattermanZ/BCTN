@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BCTN</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        margin: 24px;
+        max-width: 720px;
+      }
+      input {
+        padding: 10px;
+        font-size: 16px;
+        width: 100%;
+        max-width: 320px;
+      }
+      button {
+        padding: 10px 14px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      pre {
+        background: #f6f8fa;
+        padding: 12px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>BCTN</h1>
+    <p>This is a minimal backend+PWA bootstrap. Next steps: swipe deck UI + feed/swipes APIs.</p>
+
+    <h2>Login</h2>
+    <div>
+      <div><input id="username" placeholder="username" autocomplete="username" /></div>
+      <div style="margin-top: 8px">
+        <input id="password" placeholder="password" type="password" autocomplete="current-password" />
+      </div>
+      <div style="margin-top: 12px">
+        <button id="login">Login</button>
+        <button id="logout">Logout</button>
+      </div>
+    </div>
+
+    <h2>Me</h2>
+    <button id="me">Fetch /api/me</button>
+    <pre id="out"></pre>
+
+    <script>
+      const out = document.getElementById("out");
+      const show = (v) => (out.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2));
+
+      document.getElementById("login").addEventListener("click", async () => {
+        const username = document.getElementById("username").value;
+        const password = document.getElementById("password").value;
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        show({ status: res.status, body: await res.text() });
+      });
+
+      document.getElementById("logout").addEventListener("click", async () => {
+        const res = await fetch("/api/auth/logout", { method: "POST" });
+        show({ status: res.status });
+      });
+
+      document.getElementById("me").addEventListener("click", async () => {
+        const res = await fetch("/api/me");
+        show({ status: res.status, body: await res.text() });
+      });
+    </script>
+  </body>
+</html>
+

@@ -2,6 +2,24 @@
 
 This document proposes a concrete architecture for the Tinder-like baby-name matching app, based on decisions recorded in `@docs/PRODUCT_DECISIONS.md`.
 
+## Deployment Model (Decided)
+
+**Decision:** Single deploy (one origin).
+
+- The Rust backend serves:
+  - the JSON API, and
+  - the built PWA static assets (from `web/` build output).
+- This avoids CORS/auth complexity and keeps deployment simple (one container / one domain).
+
+## Repository Layout (Proposed)
+
+- `ingestion/`: Rust CLI crate (`bctn-ingest`) that builds/updates `data/bctn.sqlite`
+- `backend/`: Rust backend server (to be implemented)
+- `web/`: PWA frontend (to be implemented)
+- `@docs/`: product + architecture docs
+- `database_source/`: raw input sources for ingestion
+- `data/`: local databases/caches (dev artifacts)
+
 ## High-level Components
 
 - **Names DB (existing):** `data/bctn.sqlite`
