@@ -32,7 +32,7 @@
   let animX = $state(0);
   let animY = $state(0);
   let rafId = $state<number | null>(null);
-  let promoteT = $state(1);
+  let promoteT = $state(0);
   let promoteRafId = $state<number | null>(null);
 
   let history = $state<string[]>([]);
@@ -74,7 +74,6 @@
       promoteT = 1 - Math.pow(1 - t, 3);
       const done = t >= 1;
       if (done) {
-        promoteT = 1;
         promoteRafId = null;
         return;
       }
@@ -247,6 +246,12 @@
     // advance the deck only after the top card has left the screen
     index = Math.min(index + 1, cards.length);
     resetAnimation();
+    // reset the stack back to its resting (stacked) state immediately after advancing
+    if (promoteRafId !== null) {
+      cancelAnimationFrame(promoteRafId);
+      promoteRafId = null;
+    }
+    promoteT = 0;
   }
 
   function undo() {
