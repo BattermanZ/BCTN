@@ -25,6 +25,7 @@ pub(crate) enum Command {
 pub(crate) enum VariantsCommand {
     Build(VariantsBuildArgs),
     BuildEnsemble(VariantsBuildEnsembleArgs),
+    Materialize(VariantsMaterializeArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -138,4 +139,14 @@ pub(crate) struct VariantsBuildEnsembleArgs {
 
     #[arg(long)]
     pub(crate) clear_ensemble: bool,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct VariantsMaterializeArgs {
+    #[arg(long, default_value = "data/bctn.sqlite")]
+    pub(crate) db: PathBuf,
+
+    /// Rebuild variant groups + stats tables (derived data).
+    #[arg(long, default_value_t = true)]
+    pub(crate) rebuild: bool,
 }

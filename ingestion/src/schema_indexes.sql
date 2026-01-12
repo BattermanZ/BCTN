@@ -8,6 +8,11 @@ CREATE INDEX IF NOT EXISTS idx_name_observation_name_string ON name_observation(
 CREATE INDEX IF NOT EXISTS idx_name_observation_year ON name_observation(year);
 CREATE INDEX IF NOT EXISTS idx_name_observation_name_raw ON name_observation(name_raw);
 
+CREATE INDEX IF NOT EXISTS idx_variant_group_member_concept_key ON variant_group_member(concept_key);
+
+CREATE INDEX IF NOT EXISTS idx_concept_country_window_total_country ON concept_country_window_total(country, total);
+CREATE INDEX IF NOT EXISTS idx_variant_group_country_window_total_country ON variant_group_country_window_total(country, total);
+
 CREATE INDEX IF NOT EXISTS idx_wikidata_concept_match_qid ON wikidata_concept_match(qid);
 CREATE INDEX IF NOT EXISTS idx_variant_edge_from ON name_variant_edge(from_concept_id);
 CREATE INDEX IF NOT EXISTS idx_variant_edge_to ON name_variant_edge(to_concept_id);

@@ -7,6 +7,36 @@ use crate::bootstrap::bootstrap_admin;
 use crate::routes::router;
 use crate::state::AppState;
 
+async fn create_min_names_db(path: &std::path::Path) {
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .unwrap();
+
+    sqlx::query("CREATE TABLE import_run (id INTEGER PRIMARY KEY, window_start_year INTEGER NOT NULL, window_end_year INTEGER NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE name_observation (run_id INTEGER NOT NULL, country TEXT NOT NULL, count INTEGER NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO import_run (id, window_start_year, window_end_year) VALUES (1, 2005, 2024)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO name_observation (run_id, country, count) VALUES (1, 'US', 1), (1, 'FR', 1), (1, 'CL', 1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
 fn cookie_from_set_cookie(set_cookie: &str) -> String {
     set_cookie
         .split(';')
@@ -20,8 +50,12 @@ fn cookie_from_set_cookie(set_cookie: &str) -> String {
 async fn bootstrap_then_login_then_me_and_admin_list_users() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("app.sqlite");
+    let names_db_path = dir.path().join("names.sqlite");
+    create_min_names_db(&names_db_path).await;
 
-    let state = AppState::new(&db_path, false).await.unwrap();
+    let state = AppState::new(&db_path, &names_db_path, false)
+        .await
+        .unwrap();
     state.migrate().await.unwrap();
 
     bootstrap_admin(&state.db, "admin", "password123")

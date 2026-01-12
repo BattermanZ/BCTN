@@ -22,6 +22,9 @@ struct Args {
     #[arg(long, env = "BCTN_APP_DB", default_value = "data/bctn_app.sqlite")]
     app_db: PathBuf,
 
+    #[arg(long, env = "BCTN_NAMES_DB", default_value = "data/bctn.sqlite")]
+    names_db: PathBuf,
+
     /// Directory of static assets to serve (PWA build output).
     #[arg(long, env = "BCTN_STATIC_DIR", default_value = "web/public")]
     static_dir: PathBuf,
@@ -55,7 +58,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("create dir {parent:?}"))?;
 
-    let state = AppState::new(&args.app_db, args.cookie_secure).await?;
+    let state = AppState::new(&args.app_db, &args.names_db, args.cookie_secure).await?;
     state.migrate().await?;
 
     if args.bootstrap_admin_username.is_some() || args.bootstrap_admin_password.is_some() {

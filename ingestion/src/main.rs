@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         Command::Variants { command } => match command {
             VariantsCommand::Build(args) => ingestion::variants::run_build(args),
             VariantsCommand::BuildEnsemble(args) => ingestion::variants::run_build_ensemble(args),
+            VariantsCommand::Materialize(args) => ingestion::variants::run_materialize(args),
         },
     }
 }

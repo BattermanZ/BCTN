@@ -72,3 +72,48 @@ CREATE TABLE IF NOT EXISTS name_variant_edge (
   updated_at INTEGER NOT NULL,
   UNIQUE (from_concept_id, to_concept_id, method)
 );
+
+-- Derived data (safe to rebuild): variant groups are connected components over accepted edges.
+CREATE TABLE IF NOT EXISTS variant_group (
+  variant_group_key TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS variant_group_member (
+  variant_group_key TEXT NOT NULL REFERENCES variant_group(variant_group_key) ON DELETE CASCADE,
+  concept_key TEXT NOT NULL REFERENCES name_concept(concept_key) ON DELETE CASCADE,
+  PRIMARY KEY (variant_group_key, concept_key)
+);
+
+-- Derived data (safe to rebuild): precomputed totals for filtering/scoring.
+CREATE TABLE IF NOT EXISTS concept_country_window_total (
+  concept_id INTEGER NOT NULL REFERENCES name_concept(id) ON DELETE CASCADE,
+  country TEXT NOT NULL,
+  total INTEGER NOT NULL,
+  male INTEGER NOT NULL,
+  female INTEGER NOT NULL,
+  PRIMARY KEY (concept_id, country)
+);
+
+CREATE TABLE IF NOT EXISTS concept_country_top100_any (
+  concept_id INTEGER NOT NULL REFERENCES name_concept(id) ON DELETE CASCADE,
+  country TEXT NOT NULL,
+  top100_any INTEGER NOT NULL,
+  PRIMARY KEY (concept_id, country)
+);
+
+CREATE TABLE IF NOT EXISTS variant_group_country_window_total (
+  variant_group_key TEXT NOT NULL REFERENCES variant_group(variant_group_key) ON DELETE CASCADE,
+  country TEXT NOT NULL,
+  total INTEGER NOT NULL,
+  male INTEGER NOT NULL,
+  female INTEGER NOT NULL,
+  PRIMARY KEY (variant_group_key, country)
+);
+
+CREATE TABLE IF NOT EXISTS variant_group_country_top100_any (
+  variant_group_key TEXT NOT NULL REFERENCES variant_group(variant_group_key) ON DELETE CASCADE,
+  country TEXT NOT NULL,
+  top100_any INTEGER NOT NULL,
+  PRIMARY KEY (variant_group_key, country)
+);
