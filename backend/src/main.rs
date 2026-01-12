@@ -26,7 +26,7 @@ struct Args {
     names_db: PathBuf,
 
     /// Directory of static assets to serve (PWA build output).
-    #[arg(long, env = "BCTN_STATIC_DIR", default_value = "web/public")]
+    #[arg(long, env = "BCTN_STATIC_DIR", default_value = "web/build")]
     static_dir: PathBuf,
 
     /// Mark session cookies as Secure (required behind HTTPS).
