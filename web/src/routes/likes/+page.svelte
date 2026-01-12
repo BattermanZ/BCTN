@@ -46,23 +46,17 @@
 <header class="flex items-end justify-between">
   <div>
     <h1 class="text-xl font-semibold tracking-tight">Likes</h1>
-    <div class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
-      Shared likes & super-likes (mock data).
-    </div>
+    <div class="mt-1 text-sm text-zinc-600">Shared likes & super-likes (mock data).</div>
   </div>
   <Badge tone={segment === 'likes' ? 'teal' : 'amber'} label={`${list.length}`} />
 </header>
 
 <div class="mt-4">
-  <div
-    class="grid grid-cols-2 gap-2 rounded-2xl border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-900/40"
-  >
+  <div class="grid grid-cols-2 gap-2 rounded-2xl border border-zinc-200 bg-white p-1">
     <button
       type="button"
       class={`rounded-xl px-3 py-2 text-sm font-semibold ${
-        segment === 'likes'
-          ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-          : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-900'
+        segment === 'likes' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-50'
       }`}
       onclick={() => (segment = 'likes')}
     >
@@ -71,9 +65,7 @@
     <button
       type="button"
       class={`rounded-xl px-3 py-2 text-sm font-semibold ${
-        segment === 'superlikes'
-          ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900'
-          : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-900'
+        segment === 'superlikes' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-50'
       }`}
       onclick={() => (segment = 'superlikes')}
     >
@@ -84,16 +76,14 @@
 
 <div class="mt-4 space-y-3">
   {#if list.length === 0}
-    <div
-      class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-200"
-    >
+    <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700">
       Nothing here yet.
     </div>
   {:else}
     {#each list as card (card.card_key)}
       <button
         type="button"
-        class="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-sm hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/40 dark:hover:bg-zinc-900"
+        class="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-sm hover:bg-zinc-50"
         onclick={() => open(card)}
       >
         <div class="flex items-center justify-between gap-3">
@@ -102,7 +92,7 @@
             <div class="mt-1 flex flex-wrap gap-2">
               {#each card.spellings_preview.slice(0, 2) as s (s)}
                 <span
-                  class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-200"
+                  class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700"
                 >
                   {s}
                 </span>

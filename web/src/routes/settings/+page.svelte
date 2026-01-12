@@ -18,27 +18,25 @@
 <header class="flex items-end justify-between">
   <div>
     <h1 class="text-xl font-semibold tracking-tight">Settings</h1>
-    <div class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">Filters & display (mock).</div>
+    <div class="mt-1 text-sm text-zinc-600">Filters & display (mock).</div>
   </div>
   <Badge tone="neutral" label={$currentUser.username} />
 </header>
 
 <div class="mt-4 space-y-4">
-  <section
-    class="rounded-3xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900/40"
-  >
-    <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Filters</h2>
+  <section class="rounded-3xl border border-zinc-200 bg-white p-5">
+    <h2 class="text-sm font-semibold text-zinc-900">Filters</h2>
 
     <div class="mt-4">
-      <div class="text-xs font-semibold text-zinc-500 dark:text-zinc-300">Countries</div>
+      <div class="text-xs font-semibold text-zinc-500">Countries</div>
       <div class="mt-2 flex gap-2">
         {#each countries as c (c)}
           <button
             type="button"
             class={`rounded-full border px-3 py-2 text-sm font-semibold ${
               $filters.countries.includes(c)
-                ? 'border-indigo-200 bg-indigo-50 text-indigo-800 dark:border-indigo-900/60 dark:bg-indigo-950/40 dark:text-indigo-200'
-                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900'
+                ? 'border-indigo-200 bg-indigo-50 text-indigo-800'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
             }`}
             onclick={() => toggleCountry(c)}
           >
@@ -46,21 +44,21 @@
           </button>
         {/each}
       </div>
-      <div class="mt-2 text-xs text-zinc-500 dark:text-zinc-300">
+      <div class="mt-2 text-xs text-zinc-500">
         Filters use “ANY selected country passes” semantics.
       </div>
     </div>
 
     <div class="mt-4">
-      <div class="text-xs font-semibold text-zinc-500 dark:text-zinc-300">Popularity</div>
+      <div class="text-xs font-semibold text-zinc-500">Popularity</div>
       <div class="mt-2 grid grid-cols-3 gap-2">
         {#each ['rare', 'common', 'top'] as p (p)}
           <button
             type="button"
             class={`rounded-2xl border px-3 py-2 text-sm font-semibold ${
               $filters.popularity === p
-                ? 'border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-zinc-900'
-                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900'
+                ? 'border-zinc-900 bg-zinc-900 text-white'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
             }`}
             onclick={() => filters.update((f) => ({ ...f, popularity: p as typeof f.popularity }))}
           >
@@ -68,7 +66,7 @@
           </button>
         {/each}
       </div>
-      <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
+      <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700">
         <input
           type="checkbox"
           class="h-4 w-4 accent-indigo-600"
@@ -84,9 +82,9 @@
     </div>
 
     <div class="mt-4">
-      <div class="text-xs font-semibold text-zinc-500 dark:text-zinc-300">Gender</div>
+      <div class="text-xs font-semibold text-zinc-500">Gender</div>
       <select
-        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200"
+        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm"
         value={$filters.gender}
         onchange={(e) =>
           filters.update((f) => ({
@@ -104,17 +102,13 @@
     </div>
   </section>
 
-  <section
-    class="rounded-3xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900/40"
-  >
-    <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Display</h2>
+  <section class="rounded-3xl border border-zinc-200 bg-white p-5">
+    <h2 class="text-sm font-semibold text-zinc-900">Display</h2>
 
     <label class="mt-4 flex items-center justify-between gap-3">
       <div>
         <div class="text-sm font-semibold">Show last name</div>
-        <div class="text-xs text-zinc-500 dark:text-zinc-300">
-          Preview names with your last name on cards.
-        </div>
+        <div class="text-xs text-zinc-500">Preview names with your last name on cards.</div>
       </div>
       <input
         type="checkbox"
@@ -129,9 +123,9 @@
     </label>
 
     <div class="mt-4">
-      <div class="text-xs font-semibold text-zinc-500 dark:text-zinc-300">Last name</div>
+      <div class="text-xs font-semibold text-zinc-500">Last name</div>
       <input
-        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200"
+        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm"
         value={$settings.lastName}
         oninput={(e) =>
           settings.update((s) => ({ ...s, lastName: (e.currentTarget as HTMLInputElement).value }))}
@@ -141,7 +135,7 @@
     <label class="mt-4 flex items-center justify-between gap-3">
       <div>
         <div class="text-sm font-semibold">Best pick mode</div>
-        <div class="text-xs text-zinc-500 dark:text-zinc-300">
+        <div class="text-xs text-zinc-500">
           Sorts the deck using the scoring system (off by default).
         </div>
       </div>
@@ -158,11 +152,9 @@
     </label>
   </section>
 
-  <section
-    class="rounded-3xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900/40"
-  >
-    <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Accounts (mock)</h2>
-    <div class="mt-3 space-y-2 text-sm text-zinc-700 dark:text-zinc-200">
+  <section class="rounded-3xl border border-zinc-200 bg-white p-5">
+    <h2 class="text-sm font-semibold text-zinc-900">Accounts (mock)</h2>
+    <div class="mt-3 space-y-2 text-sm text-zinc-700">
       <div class="flex items-center justify-between">
         <div>{$currentUser.username}</div>
         <Badge tone="indigo" label={$currentUser.is_admin ? 'Admin' : 'User'} />
@@ -173,7 +165,7 @@
       </div>
       <a
         href={resolveRoute('/admin')}
-        class="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+        class="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:underline"
       >
         Open admin
       </a>

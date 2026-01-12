@@ -35,25 +35,21 @@
 <header class="flex items-end justify-between">
   <div>
     <h1 class="text-xl font-semibold tracking-tight">Matches</h1>
-    <div class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
-      Names you both liked (mock data).
-    </div>
+    <div class="mt-1 text-sm text-zinc-600">Names you both liked (mock data).</div>
   </div>
   <Badge tone="indigo" label={`${cards.length} matches`} />
 </header>
 
 <div class="mt-4 space-y-3">
   {#if cards.length === 0}
-    <div
-      class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-200"
-    >
+    <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700">
       No matches yet. Start swiping!
     </div>
   {:else}
     {#each cards as card (card.card_key)}
       <button
         type="button"
-        class="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-sm hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/40 dark:hover:bg-zinc-900"
+        class="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-sm hover:bg-zinc-50"
         onclick={() => open(card)}
       >
         <div class="flex items-center justify-between gap-3">
@@ -62,7 +58,7 @@
             <div class="mt-1 flex flex-wrap gap-2">
               {#each card.spellings_preview.slice(0, 2) as s (s)}
                 <span
-                  class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-200"
+                  class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700"
                 >
                   {s}
                 </span>

@@ -295,21 +295,19 @@
 </script>
 
 {#if !topCard}
-  <div
-    class="rounded-3xl border border-zinc-200 bg-white p-6 text-center dark:border-zinc-800 dark:bg-zinc-900/40"
-  >
+  <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-center">
     <div class="text-lg font-semibold">No more names</div>
-    <div class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+    <div class="mt-2 text-sm text-zinc-600">
       Try broadening filters (countries, gender, popularity) to keep exploring.
     </div>
   </div>
 {:else}
   <div class="flex flex-col gap-4">
     <div class="flex items-center justify-between">
-      <div class="text-sm text-zinc-500 dark:text-zinc-300">{remaining} left</div>
+      <div class="text-sm text-zinc-500">{remaining} left</div>
       <button
         type="button"
-        class="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+        class="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
         onclick={undo}
       >
         Undo
@@ -321,9 +319,7 @@
       {#if backCard}
         <div
           class="pointer-events-none absolute inset-0 z-0"
-          style={`transform: translate3d(0, ${18 - promoteT * 8}px, 0) scale(${0.94 + promoteT * 0.03}); opacity: ${
-            0.65 + promoteT * 0.15
-          };`}
+          style={`transform: translate3d(0, ${18 - promoteT * 8}px, 0) scale(${0.94 + promoteT * 0.03});`}
         >
           <NameCard
             card={backCard}
@@ -339,9 +335,7 @@
       {#if midCard}
         <div
           class="pointer-events-none absolute inset-0 z-10"
-          style={`transform: translate3d(0, ${10 - promoteT * 10}px, 0) scale(${0.97 + promoteT * 0.03}); opacity: ${
-            0.8 + promoteT * 0.2
-          };`}
+          style={`transform: translate3d(0, ${10 - promoteT * 10}px, 0) scale(${0.97 + promoteT * 0.03});`}
         >
           <NameCard
             card={midCard}
@@ -382,10 +376,10 @@
           <div
             class={`pointer-events-none absolute left-6 top-6 rounded-2xl border px-3 py-1 text-sm font-bold tracking-wide ${
               label.tone === 'teal'
-                ? 'border-teal-300 bg-teal-50 text-teal-800 dark:border-teal-700 dark:bg-teal-950/50 dark:text-teal-200'
+                ? 'border-teal-300 bg-teal-50 text-teal-800'
                 : label.tone === 'rose'
-                  ? 'border-rose-300 bg-rose-50 text-rose-800 dark:border-rose-700 dark:bg-rose-950/50 dark:text-rose-200'
-                  : 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200'
+                  ? 'border-rose-300 bg-rose-50 text-rose-800'
+                  : 'border-amber-300 bg-amber-50 text-amber-900'
             }`}
             transition:fade={{ duration: 80 }}
           >
@@ -398,7 +392,7 @@
     <div class="grid grid-cols-3 gap-3 pt-2">
       <button
         type="button"
-        class="rounded-full border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 shadow-sm hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/70"
+        class="rounded-full border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 shadow-sm hover:bg-rose-100 disabled:opacity-50"
         onclick={() => commitSwipeWithMomentum('nope', { startDx: 0, startDy: 0 })}
         disabled={!canSwipe()}
       >
@@ -406,7 +400,7 @@
       </button>
       <button
         type="button"
-        class="rounded-full border border-teal-200 bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-800 shadow-sm hover:bg-teal-100 dark:border-teal-900/60 dark:bg-teal-950/40 dark:text-teal-200 dark:hover:bg-teal-950/70"
+        class="rounded-full border border-teal-200 bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-800 shadow-sm hover:bg-teal-100 disabled:opacity-50"
         onclick={() => commitSwipeWithMomentum('like', { startDx: 0, startDy: 0 })}
         disabled={!canSwipe()}
       >
@@ -414,7 +408,7 @@
       </button>
       <button
         type="button"
-        class="rounded-full border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 shadow-sm hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/70"
+        class="rounded-full border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 shadow-sm hover:bg-amber-100 disabled:opacity-50"
         onclick={() => commitSwipeWithMomentum('superlike', { startDx: 0, startDy: 0 })}
         disabled={!canSwipe()}
       >
@@ -427,14 +421,12 @@
 <BottomSheet open={sheetOpen} title={topCard?.display_name} onClose={() => (sheetOpen = false)}>
   {#if topCard}
     <div class="space-y-5">
-      <div
-        class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/30"
-      >
+      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
         <div class="text-sm font-semibold">Spellings</div>
         <div class="mt-2 flex flex-wrap gap-2">
           {#each topCard.all_spellings?.slice(0, showAllSpellings ? 50 : 6) ?? topCard.spellings_preview as s (s)}
             <span
-              class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200"
+              class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-sm text-zinc-700"
             >
               {s}
             </span>
@@ -443,7 +435,7 @@
         {#if topCard.all_spellings && topCard.all_spellings.length > 6}
           <button
             type="button"
-            class="mt-3 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            class="mt-3 text-sm font-medium text-indigo-600 hover:underline"
             onclick={() => (showAllSpellings = !showAllSpellings)}
           >
             {showAllSpellings ? 'Show fewer' : 'See all spellings'}
@@ -451,41 +443,35 @@
         {/if}
 
         {#if topCard.within_concept_variants?.length}
-          <div class="mt-4 text-xs text-zinc-500 dark:text-zinc-300">
+          <div class="mt-4 text-xs text-zinc-500">
             Within-concept variants: {topCard.within_concept_variants.join(', ')}
           </div>
         {/if}
       </div>
 
-      <div
-        class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/30"
-      >
+      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
         <div class="text-sm font-semibold">Popularity (per million births)</div>
         <div class="mt-3 space-y-2">
           {#each topCard.per_country as c (c.country)}
             <div class="flex items-center justify-between text-sm">
               <div class="font-medium">{c.country}</div>
-              <div class="text-zinc-600 dark:text-zinc-200">{Math.round(c.ppm)} ppm</div>
+              <div class="text-zinc-600">{Math.round(c.ppm)} ppm</div>
             </div>
           {/each}
         </div>
       </div>
 
-      <div
-        class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/30"
-      >
+      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
         <div class="text-sm font-semibold">Rank (last 5 years)</div>
         {#if topCard.last5_year_ranks}
           <div class="mt-3 space-y-4">
             {#each rankEntries(topCard.last5_year_ranks) as [country, ranks] (country)}
               <div>
-                <div class="text-xs font-semibold text-zinc-500 dark:text-zinc-300">{country}</div>
+                <div class="text-xs font-semibold text-zinc-500">{country}</div>
                 <div class="mt-2 grid grid-cols-5 gap-2 text-center text-xs">
                   {#each ranks as r (r.year)}
-                    <div
-                      class="rounded-xl border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-950"
-                    >
-                      <div class="text-zinc-500 dark:text-zinc-300">{r.year}</div>
+                    <div class="rounded-xl border border-zinc-200 bg-white p-2">
+                      <div class="text-zinc-500">{r.year}</div>
                       <div class="mt-1 font-semibold">#{r.rank}</div>
                     </div>
                   {/each}
@@ -494,9 +480,7 @@
             {/each}
           </div>
         {:else}
-          <div class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            Not available in mock data.
-          </div>
+          <div class="mt-2 text-sm text-zinc-600">Not available in mock data.</div>
         {/if}
       </div>
     </div>

@@ -60,21 +60,19 @@
   const genderBadge = $derived(badgeForGender(gender.gender));
 </script>
 
-<div
-  class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/40"
->
+<div class="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm">
   <div class="flex items-start justify-between gap-3">
     <div class="min-w-0">
-      <div class="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+      <div class="text-3xl font-semibold tracking-tight text-zinc-900">
         {card.display_name}
       </div>
       {#if showLastName}
-        <div class="mt-1 text-sm text-zinc-500 dark:text-zinc-300">
+        <div class="mt-1 text-sm text-zinc-500">
           {card.display_name}
           {lastName}
         </div>
       {:else}
-        <div class="mt-1 text-sm text-zinc-500 dark:text-zinc-300">First name only</div>
+        <div class="mt-1 text-sm text-zinc-500">First name only</div>
       {/if}
     </div>
 
@@ -85,9 +83,7 @@
 
   <div class="mt-4 flex flex-wrap gap-2">
     {#each card.spellings_preview.slice(0, 3) as spelling (spelling)}
-      <span
-        class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950/50 dark:text-zinc-200"
-      >
+      <span class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-sm text-zinc-700">
         {spelling}
       </span>
     {/each}
@@ -96,7 +92,7 @@
   <div class="mt-4 flex flex-wrap items-center gap-2">
     <Badge tone={genderBadge.tone} label={genderBadge.label} />
     {#if gender.note}
-      <span class="text-xs text-zinc-500 dark:text-zinc-300">{gender.note}</span>
+      <span class="text-xs text-zinc-500">{gender.note}</span>
     {/if}
   </div>
 
@@ -112,7 +108,7 @@
     {/each}
   </div>
 
-  <div class="mt-5 text-xs text-zinc-500 dark:text-zinc-300">
+  <div class="mt-5 text-xs text-zinc-500">
     Swipe right to Like • left to Nope • up to Super-like • tap for details
   </div>
 </div>
