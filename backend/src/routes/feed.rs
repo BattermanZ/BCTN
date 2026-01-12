@@ -426,7 +426,6 @@ async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<V
           LEFT JOIN variant_group_country_top100_any frt ON frt.variant_group_key = vg.variant_group_key AND frt.country='FR'
           LEFT JOIN variant_group_country_window_total cl ON cl.variant_group_key = vg.variant_group_key AND cl.country='CL'
           LEFT JOIN variant_group_country_top100_any clt ON clt.variant_group_key = vg.variant_group_key AND clt.country='CL'
-          WHERE NOT EXISTS (SELECT 1 FROM swipe s WHERE s.user_id = ?1 AND s.card_key = vg.variant_group_key)
 
           UNION ALL
 
@@ -457,18 +456,16 @@ async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<V
           LEFT JOIN concept_country_window_total cl ON cl.concept_id = nc.id AND cl.country='CL'
           LEFT JOIN concept_country_top100_any clt ON clt.concept_id = nc.id AND clt.country='CL'
           WHERE vgm.concept_key IS NULL
-            AND NOT EXISTS (SELECT 1 FROM swipe s WHERE s.user_id = ?1 AND s.card_key = nc.concept_key)
         )
         SELECT * FROM cards
         ORDER BY global_total DESC, card_key ASC
-        LIMIT ?2
+        LIMIT ?1
         "#,
     )
-    .bind(user_id)
     .bind(limit)
     .fetch_all(&state.names_db)
     .await
-    .context("load candidates (run `bctn-ingest variants materialize`)")?;
+    .context("load candidates from names db (run `bctn-ingest variants materialize` if missing)")?;
 
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
@@ -502,6 +499,18 @@ async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<V
             },
         });
     }
+
+    // `swipe` lives in the app DB (state.db), not the names DB (state.names_db). Filter in Rust.
+    let swiped: Vec<String> = sqlx::query_scalar("SELECT card_key FROM swipe WHERE user_id = ?1")
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await
+        .context("load swiped card keys")?;
+    if !swiped.is_empty() {
+        let swiped_set: std::collections::HashSet<String> = swiped.into_iter().collect();
+        out.retain(|c| !swiped_set.contains(&c.card_key));
+    }
+
     Ok(out)
 }
 
