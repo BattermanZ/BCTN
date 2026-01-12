@@ -3,15 +3,17 @@
   import Icon from '$lib/components/Icon.svelte';
   import NameCard from '$lib/components/NameCard.svelte';
   import type { Card, CountryCode, GenderLabel, SwipeAction } from '$lib/types';
+  import { api } from '$lib/api';
   import { filters, settings, swipes } from '$lib/stores/app';
+  import { goto } from '$app/navigation';
   import { fade } from 'svelte/transition';
 
-  type Props = { cards: Card[] };
-  let { cards }: Props = $props();
-
-  let index = $state(0);
+  let deck = $state<Card[]>([]);
   let showAllSpellings = $state(false);
   let flipped = $state(false);
+  let loading = $state(false);
+  let loadError = $state<string | null>(null);
+  let detailsLoading = $state(false);
 
   let dragging = $state(false);
   let activePointerId = $state<number | null>(null);
@@ -20,11 +22,9 @@
   let dx = $state(0);
   let dy = $state(0);
 
-  const remaining = $derived(cards.length - index);
-
-  const topCard = $derived(cards[index]);
-  const midCard = $derived(cards[index + 1]);
-  const backCard = $derived(cards[index + 2]);
+  const topCard = $derived(deck[0]);
+  const midCard = $derived(deck[1]);
+  const backCard = $derived(deck[2]);
 
   type MoveSample = { t: number; dx: number; dy: number };
   let samples = $state<MoveSample[]>([]);
@@ -36,11 +36,90 @@
   let promoteT = $state(0);
   let promoteRafId = $state<number | null>(null);
 
-  let history = $state<string[]>([]);
+  let history = $state<Array<{ card: Card; action: SwipeAction }>>([]);
 
   const topX = $derived(dragging ? dx : animating ? animX : 0);
   const topY = $derived(dragging ? dy : animating ? animY : 0);
   const topRotate = $derived(topX / 18);
+
+  async function refillDeck() {
+    if (loading) return;
+    loadError = null;
+    loading = true;
+    try {
+      while (deck.length < 3) {
+        const next = await api.feedNext({
+          countries: $filters.countries.join(','),
+          pop: $filters.popularity,
+          include_extra_rare: $filters.includeExtraRare,
+          gender: $filters.gender,
+        });
+        deck = [...deck, next];
+      }
+    } catch (e) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 401) {
+        await goto('/login');
+        return;
+      }
+      loadError = (e as Error | null)?.message ?? 'Failed to load names';
+    } finally {
+      loading = false;
+    }
+  }
+
+  function resetDeck() {
+    resetDrag();
+    resetAnimation();
+    flipped = false;
+    showAllSpellings = false;
+    history = [];
+    deck = [];
+    void refillDeck();
+  }
+
+  $effect(() => {
+    // restart the feed when filters change (per product decision)
+    void $filters;
+    resetDeck();
+  });
+
+  let lastBestPick = $state<boolean | null>(null);
+  $effect(() => {
+    const bp = $settings.bestPickMode;
+    if (lastBestPick === null) {
+      lastBestPick = bp;
+      return;
+    }
+    if (bp !== lastBestPick) {
+      lastBestPick = bp;
+      resetDeck();
+    }
+  });
+
+  async function ensureTopDetails(card: Card) {
+    if (detailsLoading) return;
+    if (card.all_spellings && card.last5_year_ranks) return;
+    detailsLoading = true;
+    try {
+      const full = await api.cardDetails(card.card_key);
+      if (deck[0]?.card_key === card.card_key) {
+        deck = [full, ...deck.slice(1)];
+      }
+    } catch (e) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 401) {
+        await goto('/login');
+      }
+    } finally {
+      detailsLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if (!flipped || !topCard) return;
+    void ensureTopDetails(topCard);
+  });
 
   function resetDrag() {
     dragging = false;
@@ -219,7 +298,8 @@
     if (animating) return;
     flipped = false;
 
-    const cardKey = topCard.card_key;
+    const swipedCard = topCard;
+    const cardKey = swipedCard.card_key;
     const { vx, vy } = sampleVelocity();
 
     // lock gesture immediately
@@ -227,12 +307,13 @@
     activePointerId = null;
 
     // record swipe immediately (even while animating)
-    history = [...history, cardKey];
+    history = [...history, { card: swipedCard, action }];
     swipes.update((s) => ({
       ...s,
       byCardKey: { ...s.byCardKey, [cardKey]: action },
       lastAction: { card_key: cardKey, action },
     }));
+    void api.createSwipe({ card_key: cardKey, card_kind: swipedCard.card_kind, action });
 
     // animate top card off-screen
     resetAnimation();
@@ -248,9 +329,10 @@
     await animateTo(target.x, target.y, target.durationMs);
 
     // advance the deck only after the top card has left the screen
-    index = Math.min(index + 1, cards.length);
+    deck = deck.slice(1);
     resetAnimation();
     showAllSpellings = false;
+    await refillDeck();
     // reset the stack back to its resting (stacked) state immediately after advancing
     if (promoteRafId !== null) {
       cancelAnimationFrame(promoteRafId);
@@ -259,25 +341,34 @@
     promoteT = 0;
   }
 
-  function undo() {
+  async function undo() {
     if (dragging || animating) return;
-    const lastKey = history.at(-1);
-    if (!lastKey) return;
+    const last = history.at(-1);
+    if (!last) return;
     flipped = false;
     showAllSpellings = false;
 
-    history = history.slice(0, -1);
-    swipes.update((s) => {
-      const nextBy = { ...s.byCardKey };
-      delete nextBy[lastKey];
-      return { ...s, byCardKey: nextBy, lastAction: undefined };
-    });
+    try {
+      const res = await api.undoSwipe();
+      if (res.status !== 'ok' || !res.undone) return;
 
-    const pos = cards.findIndex((c) => c.card_key === lastKey);
-    if (pos >= 0) {
-      index = pos;
-    } else if (index > 0) {
-      index -= 1;
+      // Restore the last swiped card locally (prefer our history; fallback to API lookup).
+      const undoneKey = res.undone.card_key;
+      const card =
+        last.card.card_key === undoneKey ? last.card : await api.cardDetails(res.undone.card_key);
+
+      history = history.slice(0, -1);
+      swipes.update((s) => {
+        const nextBy = { ...s.byCardKey };
+        delete nextBy[undoneKey];
+        return { ...s, byCardKey: nextBy, lastAction: undefined };
+      });
+      deck = [card, ...deck];
+    } catch (e) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 401) {
+        await goto('/login');
+      }
     }
   }
 
@@ -337,11 +428,20 @@
 {:else}
   <div class="flex flex-col gap-4">
     <div class="flex items-center justify-between">
-      <div class="text-sm text-zinc-500">{remaining} left</div>
+      <div class="text-sm text-zinc-500">
+        {#if loadError}
+          {loadError}
+        {:else if loading}
+          Loading…
+        {:else}
+          {Math.max(0, deck.length - 1)} queued
+        {/if}
+      </div>
       <button
         type="button"
         class="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
         onclick={undo}
+        disabled={history.length === 0 || dragging || animating}
       >
         Undo
       </button>
@@ -451,6 +551,9 @@
                     <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
                       <div class="flex items-center justify-between gap-3">
                         <div class="text-sm font-semibold text-zinc-900">Spellings</div>
+                        {#if detailsLoading && !topCard.all_spellings}
+                          <Badge tone="neutral" label="Loading…" />
+                        {/if}
                         {#if topCard.all_spellings && topCard.all_spellings.length > 6}
                           <button
                             type="button"
@@ -462,13 +565,17 @@
                         {/if}
                       </div>
                       <div class="mt-3 flex flex-wrap gap-2">
-                        {#each topCard.all_spellings?.slice(0, showAllSpellings ? 80 : 10) ?? topCard.spellings_preview as s (s)}
-                          <span
-                            class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700"
-                          >
-                            {s}
-                          </span>
-                        {/each}
+                        {#if detailsLoading && !topCard.all_spellings}
+                          <div class="text-sm text-zinc-600">Fetching spellings…</div>
+                        {:else}
+                          {#each topCard.all_spellings?.slice(0, showAllSpellings ? 80 : 10) ?? topCard.spellings_preview as s (s)}
+                            <span
+                              class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700"
+                            >
+                              {s}
+                            </span>
+                          {/each}
+                        {/if}
                       </div>
                       {#if topCard.within_concept_variants?.length}
                         <div class="mt-3 text-xs text-zinc-500">
@@ -494,7 +601,9 @@
 
                     <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
                       <div class="text-sm font-semibold text-zinc-900">Rank (last 5 years)</div>
-                      {#if topCard.last5_year_ranks}
+                      {#if detailsLoading && !topCard.last5_year_ranks}
+                        <div class="mt-2 text-sm text-zinc-600">Fetching ranks…</div>
+                      {:else if topCard.last5_year_ranks}
                         <div class="mt-3 space-y-4">
                           {#each rankEntries(topCard.last5_year_ranks) as [country, ranks] (country)}
                             <div>
@@ -511,7 +620,7 @@
                           {/each}
                         </div>
                       {:else}
-                        <div class="mt-2 text-sm text-zinc-600">Not available in mock data.</div>
+                        <div class="mt-2 text-sm text-zinc-600">Not available.</div>
                       {/if}
                     </section>
                   </div>

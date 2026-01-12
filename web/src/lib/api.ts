@@ -1,0 +1,132 @@
+import type { Card, SwipeAction, User } from '$lib/types';
+
+export type ApiError = Error & { status?: number };
+
+function apiError(message: string, status?: number): ApiError {
+  const err = new Error(message) as ApiError;
+  err.status = status;
+  return err;
+}
+
+async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body) headers.set('content-type', 'application/json');
+
+  const res = await fetch(path, {
+    ...init,
+    credentials: 'include',
+    headers,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw apiError(text || res.statusText, res.status);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export type MeResponse = { id: number; username: string; is_admin: boolean };
+export type UserSummary = { id: number; username: string; is_admin: boolean };
+
+export type SettingsResponse = {
+  show_last_name: boolean;
+  last_name: string;
+  best_pick_mode: boolean;
+};
+export type PatchSettingsRequest = Partial<SettingsResponse>;
+
+export type FeedQuery = {
+  countries: string;
+  pop: 'rare' | 'common' | 'top';
+  include_extra_rare: boolean;
+  gender: string;
+};
+
+export type SwipeCreateRequest = {
+  card_key: string;
+  card_kind: 'group' | 'concept';
+  action: SwipeAction;
+};
+
+export type SwipeCreateResponse = { status: string; match_created: boolean };
+export type SwipeUndoResponse = {
+  status: string;
+  undone: null | { card_key: string; action: SwipeAction };
+  match_removed: boolean;
+};
+
+export type CardRef = { card_key: string; card_kind: 'group' | 'concept'; display_name: string };
+
+export const api = {
+  async me(): Promise<User> {
+    const me = await apiFetch<MeResponse>('/api/me');
+    return { id: me.id, username: me.username, is_admin: me.is_admin };
+  },
+
+  async users(): Promise<User[]> {
+    const users = await apiFetch<UserSummary[]>('/api/users');
+    return users.map((u) => ({ id: u.id, username: u.username, is_admin: u.is_admin }));
+  },
+
+  async login(username: string, password: string): Promise<User> {
+    const me = await apiFetch<MeResponse>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+    return { id: me.id, username: me.username, is_admin: me.is_admin };
+  },
+
+  async logout(): Promise<void> {
+    await apiFetch<void>('/api/auth/logout', { method: 'POST' });
+  },
+
+  async getSettings(): Promise<SettingsResponse> {
+    return await apiFetch<SettingsResponse>('/api/settings');
+  },
+
+  async patchSettings(patch: PatchSettingsRequest): Promise<SettingsResponse> {
+    return await apiFetch<SettingsResponse>('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async feedNext(q: FeedQuery): Promise<Card> {
+    const params = new URLSearchParams({
+      countries: q.countries,
+      pop: q.pop,
+      include_extra_rare: q.include_extra_rare ? 'true' : 'false',
+      gender: q.gender,
+    });
+    return await apiFetch<Card>(`/api/feed/next?${params.toString()}`);
+  },
+
+  async cardDetails(card_key: string): Promise<Card> {
+    return await apiFetch<Card>(`/api/card/${encodeURIComponent(card_key)}`);
+  },
+
+  async createSwipe(req: SwipeCreateRequest): Promise<SwipeCreateResponse> {
+    return await apiFetch<SwipeCreateResponse>('/api/swipes', {
+      method: 'POST',
+      body: JSON.stringify({ ...req, action: req.action }),
+    });
+  },
+
+  async undoSwipe(): Promise<SwipeUndoResponse> {
+    return await apiFetch<SwipeUndoResponse>('/api/swipes/undo', { method: 'POST' });
+  },
+
+  async matches(): Promise<CardRef[]> {
+    return await apiFetch<CardRef[]>('/api/matches');
+  },
+
+  async likes(): Promise<CardRef[]> {
+    return await apiFetch<CardRef[]>('/api/likes');
+  },
+
+  async superlikes(): Promise<CardRef[]> {
+    return await apiFetch<CardRef[]>('/api/superlikes');
+  },
+};

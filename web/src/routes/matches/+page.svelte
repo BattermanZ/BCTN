@@ -2,68 +2,85 @@
   import BottomSheet from '$lib/components/BottomSheet.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import NameCard from '$lib/components/NameCard.svelte';
-  import { mockCards } from '$lib/mock/cards';
-  import { computeMatches, filterCardsByKeys, type SwipeRecord } from '$lib/mock/swipeViews';
+  import { api, type CardRef } from '$lib/api';
   import { filters, settings } from '$lib/stores/app';
+  import type { Card } from '$lib/types';
+  import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
 
   let sheetOpen = $state(false);
-  let selected = $state<(typeof mockCards)[number] | null>(null);
+  let refs = $state<CardRef[]>([]);
+  let selected = $state<Card | null>(null);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
 
-  const mockSwipes: SwipeRecord[] = [
-    { card_key: 'amelie', action: 'like', by: 'you', at: 10 },
-    { card_key: 'amelie', action: 'like', by: 'partner', at: 11 },
-    { card_key: 'sacha', action: 'superlike', by: 'you', at: 12 },
-    { card_key: 'sacha', action: 'like', by: 'partner', at: 18 },
-    { card_key: 'noa', action: 'nope', by: 'you', at: 9 },
-    { card_key: 'noa', action: 'like', by: 'partner', at: 13 },
-  ];
-
-  const matches = $derived(computeMatches(mockSwipes));
-  const cards = $derived(
-    filterCardsByKeys(
-      mockCards,
-      matches.map((m) => m.card_key)
-    )
-  );
-
-  function open(card: (typeof mockCards)[number]) {
-    selected = card;
-    sheetOpen = true;
+  async function load() {
+    loading = true;
+    error = null;
+    try {
+      refs = await api.matches();
+    } catch (e) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 401) {
+        await goto('/login');
+        return;
+      }
+      error = (e as Error | null)?.message ?? 'Failed to load matches';
+    } finally {
+      loading = false;
+    }
   }
+
+  async function open(ref: CardRef) {
+    try {
+      selected = await api.cardDetails(ref.card_key);
+      sheetOpen = true;
+    } catch (e) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 401) {
+        await goto('/login');
+      } else {
+        error = (e as Error | null)?.message ?? 'Failed to load card';
+      }
+    }
+  }
+
+  onMount(() => {
+    void load();
+  });
 </script>
 
 <header class="flex items-end justify-between">
   <div>
     <h1 class="text-xl font-semibold tracking-tight">Matches</h1>
-    <div class="mt-1 text-sm text-zinc-600">Names you both liked (mock data).</div>
+    <div class="mt-1 text-sm text-zinc-600">Names you both liked.</div>
   </div>
-  <Badge tone="indigo" label={`${cards.length} matches`} />
+  <Badge tone="indigo" label={`${refs.length} matches`} />
 </header>
 
 <div class="mt-4 space-y-3">
-  {#if cards.length === 0}
+  {#if error}
+    <div class="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-800">
+      {error}
+    </div>
+  {:else if loading}
+    <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700">
+      Loading…
+    </div>
+  {:else if refs.length === 0}
     <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700">
       No matches yet. Start swiping!
     </div>
   {:else}
-    {#each cards as card (card.card_key)}
+    {#each refs as ref (ref.card_key)}
       <button
         type="button"
         class="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-sm hover:bg-zinc-50"
-        onclick={() => open(card)}
+        onclick={() => open(ref)}
       >
         <div class="flex items-center justify-between gap-3">
           <div class="min-w-0">
-            <div class="truncate text-base font-semibold">{card.display_name}</div>
-            <div class="mt-1 flex flex-wrap gap-2">
-              {#each card.spellings_preview.slice(0, 2) as s (s)}
-                <span
-                  class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700"
-                >
-                  {s}
-                </span>
-              {/each}
-            </div>
+            <div class="truncate text-base font-semibold">{ref.display_name}</div>
           </div>
           <Badge tone="teal" label="Matched" />
         </div>

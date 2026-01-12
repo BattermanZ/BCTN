@@ -81,10 +81,11 @@ pub(crate) async fn likes(State(state): State<AppState>, jar: CookieJar) -> impl
 }
 
 async fn likes_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRef>> {
-    super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT card_key FROM swipe WHERE action = 'like' GROUP BY card_key ORDER BY MAX(created_at) DESC",
+        "SELECT card_key FROM swipe WHERE user_id = ?1 AND action = 'like' GROUP BY card_key ORDER BY MAX(created_at) DESC",
     )
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .context("load likes")?;
@@ -104,10 +105,11 @@ pub(crate) async fn superlikes(State(state): State<AppState>, jar: CookieJar) ->
 }
 
 async fn superlikes_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRef>> {
-    super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT card_key FROM swipe WHERE action = 'superlike' GROUP BY card_key ORDER BY MAX(created_at) DESC",
+        "SELECT card_key FROM swipe WHERE user_id = ?1 AND action = 'superlike' GROUP BY card_key ORDER BY MAX(created_at) DESC",
     )
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .context("load superlikes")?;

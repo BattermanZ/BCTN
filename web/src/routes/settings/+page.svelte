@@ -1,8 +1,10 @@
 <script lang="ts">
   import Badge from '$lib/components/Badge.svelte';
+  import { api } from '$lib/api';
   import { currentUser, filters, partnerUser, settings } from '$lib/stores/app';
   import type { CountryCode } from '$lib/types';
   import { resolveRoute } from '$app/paths';
+  import { goto } from '$app/navigation';
 
   const countries: CountryCode[] = ['US', 'FR', 'CL'];
 
@@ -13,14 +15,38 @@
       return { ...f, countries: next.length ? next : f.countries };
     });
   }
+
+  let lastNameTimer = $state<number | null>(null);
+
+  async function patchSettings(patch: {
+    show_last_name?: boolean;
+    last_name?: string;
+    best_pick_mode?: boolean;
+  }) {
+    try {
+      const s = await api.patchSettings(patch);
+      settings.set({
+        showLastName: s.show_last_name,
+        lastName: s.last_name,
+        bestPickMode: s.best_pick_mode,
+      });
+    } catch (e) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 401) {
+        await goto('/login');
+      }
+    }
+  }
 </script>
 
 <header class="flex items-end justify-between">
   <div>
     <h1 class="text-xl font-semibold tracking-tight">Settings</h1>
-    <div class="mt-1 text-sm text-zinc-600">Filters & display (mock).</div>
+    <div class="mt-1 text-sm text-zinc-600">Filters & display.</div>
   </div>
-  <Badge tone="neutral" label={$currentUser.username} />
+  {#if $currentUser}
+    <Badge tone="neutral" label={$currentUser.username} />
+  {/if}
 </header>
 
 <div class="mt-4 space-y-4">
@@ -114,11 +140,11 @@
         type="checkbox"
         class="h-5 w-5 accent-indigo-600"
         checked={$settings.showLastName}
-        onchange={(e) =>
-          settings.update((s) => ({
-            ...s,
-            showLastName: (e.currentTarget as HTMLInputElement).checked,
-          }))}
+        onchange={(e) => {
+          const checked = (e.currentTarget as HTMLInputElement).checked;
+          settings.update((s) => ({ ...s, showLastName: checked }));
+          void patchSettings({ show_last_name: checked });
+        }}
       />
     </label>
 
@@ -127,8 +153,15 @@
       <input
         class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm"
         value={$settings.lastName}
-        oninput={(e) =>
-          settings.update((s) => ({ ...s, lastName: (e.currentTarget as HTMLInputElement).value }))}
+        oninput={(e) => {
+          const value = (e.currentTarget as HTMLInputElement).value;
+          settings.update((s) => ({ ...s, lastName: value }));
+          if (lastNameTimer !== null) window.clearTimeout(lastNameTimer);
+          lastNameTimer = window.setTimeout(() => {
+            void patchSettings({ last_name: value });
+            lastNameTimer = null;
+          }, 400);
+        }}
       />
     </div>
 
@@ -143,26 +176,30 @@
         type="checkbox"
         class="h-5 w-5 accent-indigo-600"
         checked={$settings.bestPickMode}
-        onchange={(e) =>
-          settings.update((s) => ({
-            ...s,
-            bestPickMode: (e.currentTarget as HTMLInputElement).checked,
-          }))}
+        onchange={(e) => {
+          const checked = (e.currentTarget as HTMLInputElement).checked;
+          settings.update((s) => ({ ...s, bestPickMode: checked }));
+          void patchSettings({ best_pick_mode: checked });
+        }}
       />
     </label>
   </section>
 
   <section class="rounded-3xl border border-zinc-200 bg-white p-5">
-    <h2 class="text-sm font-semibold text-zinc-900">Accounts (mock)</h2>
+    <h2 class="text-sm font-semibold text-zinc-900">Accounts</h2>
     <div class="mt-3 space-y-2 text-sm text-zinc-700">
-      <div class="flex items-center justify-between">
-        <div>{$currentUser.username}</div>
-        <Badge tone="indigo" label={$currentUser.is_admin ? 'Admin' : 'User'} />
-      </div>
-      <div class="flex items-center justify-between">
-        <div>{$partnerUser.username}</div>
-        <Badge tone="neutral" label={$partnerUser.is_admin ? 'Admin' : 'User'} />
-      </div>
+      {#if $currentUser}
+        <div class="flex items-center justify-between">
+          <div>{$currentUser.username}</div>
+          <Badge tone="indigo" label={$currentUser.is_admin ? 'Admin' : 'User'} />
+        </div>
+      {/if}
+      {#if $partnerUser}
+        <div class="flex items-center justify-between">
+          <div>{$partnerUser.username}</div>
+          <Badge tone="neutral" label={$partnerUser.is_admin ? 'Admin' : 'User'} />
+        </div>
+      {/if}
       <a
         href={resolveRoute('/admin')}
         class="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:underline"

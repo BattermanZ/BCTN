@@ -1,6 +1,5 @@
 <script lang="ts">
   import SwipeDeck from '$lib/components/SwipeDeck.svelte';
-  import { mockCards } from '$lib/mock/cards';
 </script>
 
 <header class="flex items-center justify-between">
@@ -11,5 +10,5 @@
 </header>
 
 <div class="mt-4">
-  <SwipeDeck cards={mockCards} />
+  <SwipeDeck />
 </div>

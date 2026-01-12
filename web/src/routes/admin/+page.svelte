@@ -35,48 +35,52 @@
     <h2 class="text-sm font-semibold text-zinc-900">Users</h2>
 
     <div class="mt-3 space-y-3">
-      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-        <div class="flex items-center justify-between">
-          <div class="text-sm font-semibold">{$currentUser.username}</div>
-          <Badge tone="indigo" label={$currentUser.is_admin ? 'Admin' : 'User'} />
+      {#if $currentUser}
+        <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+          <div class="flex items-center justify-between">
+            <div class="text-sm font-semibold">{$currentUser.username}</div>
+            <Badge tone="indigo" label={$currentUser.is_admin ? 'Admin' : 'User'} />
+          </div>
+          <div class="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              class="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              class="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-400"
+              disabled
+            >
+              Delete
+            </button>
+          </div>
         </div>
-        <div class="mt-3 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            class="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            class="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-400"
-            disabled
-          >
-            Delete
-          </button>
-        </div>
-      </div>
+      {/if}
 
-      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-        <div class="flex items-center justify-between">
-          <div class="text-sm font-semibold">{$partnerUser.username}</div>
-          <Badge tone="neutral" label={$partnerUser.is_admin ? 'Admin' : 'User'} />
+      {#if $partnerUser}
+        <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+          <div class="flex items-center justify-between">
+            <div class="text-sm font-semibold">{$partnerUser.username}</div>
+            <Badge tone="neutral" label={$partnerUser.is_admin ? 'Admin' : 'User'} />
+          </div>
+          <div class="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              class="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              class="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100"
+            >
+              Delete
+            </button>
+          </div>
         </div>
-        <div class="mt-3 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            class="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            class="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100"
-          >
-            Delete
-          </button>
-        </div>
-      </div>
+      {/if}
     </div>
 
     <div class="mt-4 text-xs text-zinc-500">

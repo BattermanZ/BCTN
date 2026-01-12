@@ -1,8 +1,10 @@
 pub(crate) mod admin;
 pub(crate) mod auth;
+pub(crate) mod card;
 pub(crate) mod feed;
 pub(crate) mod settings;
 pub(crate) mod swipes;
+pub(crate) mod users;
 pub(crate) mod views;
 
 #[cfg(test)]
@@ -19,12 +21,14 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/me", get(auth::me))
+        .route("/api/users", get(users::list))
         .route("/api/feed/next", get(feed::next))
         .route("/api/swipes", post(swipes::create))
         .route("/api/swipes/undo", post(swipes::undo))
         .route("/api/matches", get(views::matches))
         .route("/api/likes", get(views::likes))
         .route("/api/superlikes", get(views::superlikes))
+        .route("/api/card/:card_key", get(card::get))
         .route(
             "/api/settings",
             get(settings::get_settings).patch(settings::patch_settings),

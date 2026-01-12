@@ -19,17 +19,8 @@ export type SwipeState = {
   lastAction?: { card_key: string; action: SwipeAction };
 };
 
-export const currentUser = writable<User>({
-  id: 'u1',
-  username: 'battercode',
-  is_admin: true,
-});
-
-export const partnerUser = writable<User>({
-  id: 'u2',
-  username: 'partner',
-  is_admin: false,
-});
+export const currentUser = writable<User | null>(null);
+export const partnerUser = writable<User | null>(null);
 
 export const filters = writable<AppFilters>({
   countries: ['US', 'FR', 'CL'],

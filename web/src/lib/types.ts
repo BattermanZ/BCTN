@@ -34,7 +34,7 @@ export type Card = {
 };
 
 export type User = {
-  id: string;
+  id: number;
   username: string;
   is_admin: boolean;
 };
