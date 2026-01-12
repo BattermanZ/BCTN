@@ -1,8 +1,8 @@
 <script lang="ts">
-  import BottomSheet from '$lib/components/BottomSheet.svelte';
+  import Badge from '$lib/components/Badge.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import NameCard from '$lib/components/NameCard.svelte';
-  import type { Card, CountryCode, SwipeAction } from '$lib/types';
+  import type { Card, CountryCode, GenderLabel, SwipeAction } from '$lib/types';
   import { filters, settings, swipes } from '$lib/stores/app';
   import { fade } from 'svelte/transition';
 
@@ -10,8 +10,8 @@
   let { cards }: Props = $props();
 
   let index = $state(0);
-  let sheetOpen = $state(false);
   let showAllSpellings = $state(false);
+  let flipped = $state(false);
 
   let dragging = $state(false);
   let activePointerId = $state<number | null>(null);
@@ -94,6 +94,7 @@
     if (!topCard) return;
     if (dragging) return;
     if (animating) return;
+    if (flipped) return;
     dragging = true;
     activePointerId = e.pointerId;
     startX = e.clientX;
@@ -132,7 +133,8 @@
       void commitSwipeWithMomentum('superlike', { startDx: dx, startDy: dy });
     } else {
       if (absX < tapThreshold && absY < tapThreshold) {
-        openDetails();
+        flipped = !flipped;
+        showAllSpellings = false;
       }
       resetDrag();
     }
@@ -215,6 +217,7 @@
   ) {
     if (!topCard) return;
     if (animating) return;
+    flipped = false;
 
     const cardKey = topCard.card_key;
     const { vx, vy } = sampleVelocity();
@@ -247,6 +250,7 @@
     // advance the deck only after the top card has left the screen
     index = Math.min(index + 1, cards.length);
     resetAnimation();
+    showAllSpellings = false;
     // reset the stack back to its resting (stacked) state immediately after advancing
     if (promoteRafId !== null) {
       cancelAnimationFrame(promoteRafId);
@@ -259,6 +263,8 @@
     if (dragging || animating) return;
     const lastKey = history.at(-1);
     if (!lastKey) return;
+    flipped = false;
+    showAllSpellings = false;
 
     history = history.slice(0, -1);
     swipes.update((s) => {
@@ -276,15 +282,41 @@
   }
 
   function canSwipe(): boolean {
-    return Boolean(topCard) && !dragging && !animating;
+    return Boolean(topCard) && !dragging && !animating && !flipped;
   }
 
-  function openDetails() {
-    if (!topCard) return;
-    if (animating) return;
-    sheetOpen = true;
-    showAllSpellings = false;
+  function genderForSelected(card: Card): { gender: GenderLabel; note?: string } {
+    const selected = card.per_country.filter((c) => $filters.countries.includes(c.country));
+    if (selected.some((c) => c.gender === 'unisex')) {
+      const countries = selected
+        .filter((c) => c.gender === 'unisex')
+        .map((c) => c.country)
+        .join(', ');
+      return { gender: 'unisex', note: `Unisex in ${countries}` };
+    }
+    const first = selected[0] ?? card.per_country[0];
+    return { gender: first?.gender ?? 'unknown', note: undefined };
   }
+
+  function tintRgbForGender(label: GenderLabel): string {
+    switch (label) {
+      case 'male':
+      case 'mostly_male':
+        return '59,130,246'; // blue-500
+      case 'female':
+      case 'mostly_female':
+        return '236,72,153'; // pink-500
+      case 'unisex':
+        return '139,92,246'; // violet-500
+      default:
+        return '99,102,241'; // indigo-500
+    }
+  }
+
+  const topGenderInfo = $derived(
+    topCard ? genderForSelected(topCard) : ({ gender: 'unknown', note: undefined } as const)
+  );
+  const topTintRgb = $derived(tintRgbForGender(topGenderInfo.gender));
 
   type RankPoint = { year: number; rank: number };
   function rankEntries(input: Card['last5_year_ranks']): Array<[CountryCode, Array<RankPoint>]> {
@@ -364,20 +396,135 @@
           onkeydown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              openDetails();
+              flipped = !flipped;
+              showAllSpellings = false;
             }
           }}
           role="button"
           tabindex="0"
         >
-          <NameCard
-            card={topCard}
-            showLastName={$settings.showLastName}
-            lastName={$settings.lastName}
-            selectedCountries={$filters.countries}
-            showScore={$settings.bestPickMode}
-            className="h-full w-full"
-          />
+          <div class="h-full w-full [perspective:1200px]">
+            <div
+              class={`relative h-full w-full transition-transform duration-300 [transform-style:preserve-3d] ${
+                flipped ? '[transform:rotateY(180deg)]' : ''
+              }`}
+            >
+              <div class="absolute inset-0 [backface-visibility:hidden]">
+                <NameCard
+                  card={topCard}
+                  showLastName={$settings.showLastName}
+                  lastName={$settings.lastName}
+                  selectedCountries={$filters.countries}
+                  showScore={$settings.bestPickMode}
+                  className="h-full w-full"
+                />
+              </div>
+
+              <div
+                class="absolute inset-0 overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm [backface-visibility:hidden] [transform:rotateY(180deg)]"
+              >
+                <div
+                  class="pointer-events-none absolute inset-0"
+                  style={`background: radial-gradient(circle at 30% 10%, rgba(${topTintRgb}, 0.12), transparent 60%);`}
+                ></div>
+
+                <div class="relative flex h-full flex-col p-5">
+                  <div class="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50"
+                      onclick={() => {
+                        flipped = false;
+                        showAllSpellings = false;
+                      }}
+                    >
+                      <Icon name="chevronRight" className="rotate-180" />
+                      Back
+                    </button>
+                    <div class="min-w-0 text-right">
+                      <div class="truncate text-sm font-semibold text-zinc-900">Details</div>
+                      <div class="truncate text-xs text-zinc-500">{topCard.display_name}</div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 flex-1 space-y-3 overflow-auto pr-1">
+                    <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="text-sm font-semibold text-zinc-900">Spellings</div>
+                        {#if topCard.all_spellings && topCard.all_spellings.length > 6}
+                          <button
+                            type="button"
+                            class="text-xs font-semibold text-indigo-600 hover:underline"
+                            onclick={() => (showAllSpellings = !showAllSpellings)}
+                          >
+                            {showAllSpellings ? 'Show fewer' : 'See all'}
+                          </button>
+                        {/if}
+                      </div>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        {#each topCard.all_spellings?.slice(0, showAllSpellings ? 80 : 10) ?? topCard.spellings_preview as s (s)}
+                          <span
+                            class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700"
+                          >
+                            {s}
+                          </span>
+                        {/each}
+                      </div>
+                      {#if topCard.within_concept_variants?.length}
+                        <div class="mt-3 text-xs text-zinc-500">
+                          Within-concept variants: {topCard.within_concept_variants.join(', ')}
+                        </div>
+                      {/if}
+                    </section>
+
+                    <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="text-sm font-semibold text-zinc-900">Popularity</div>
+                        <Badge tone="neutral" label="per million births" />
+                      </div>
+                      <div class="mt-3 space-y-2">
+                        {#each topCard.per_country as c (c.country)}
+                          <div class="flex items-center justify-between text-sm">
+                            <div class="font-medium text-zinc-800">{c.country}</div>
+                            <div class="text-zinc-600">{Math.round(c.ppm)} ppm</div>
+                          </div>
+                        {/each}
+                      </div>
+                    </section>
+
+                    <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
+                      <div class="text-sm font-semibold text-zinc-900">Rank (last 5 years)</div>
+                      {#if topCard.last5_year_ranks}
+                        <div class="mt-3 space-y-4">
+                          {#each rankEntries(topCard.last5_year_ranks) as [country, ranks] (country)}
+                            <div>
+                              <div class="text-xs font-semibold text-zinc-500">{country}</div>
+                              <div class="mt-2 grid grid-cols-5 gap-2 text-center text-[11px]">
+                                {#each ranks as r (r.year)}
+                                  <div class="rounded-xl border border-zinc-200 bg-white p-2">
+                                    <div class="text-zinc-500">{r.year}</div>
+                                    <div class="mt-1 font-semibold">#{r.rank}</div>
+                                  </div>
+                                {/each}
+                              </div>
+                            </div>
+                          {/each}
+                        </div>
+                      {:else}
+                        <div class="mt-2 text-sm text-zinc-600">Not available in mock data.</div>
+                      {/if}
+                    </section>
+                  </div>
+
+                  {#if topGenderInfo.note}
+                    <div class="mt-3 text-center text-[11px] text-zinc-400">
+                      {topGenderInfo.note}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          </div>
 
           {#if label.label}
             <div
@@ -428,72 +575,3 @@
     </div>
   </div>
 {/if}
-
-<BottomSheet open={sheetOpen} title={topCard?.display_name} onClose={() => (sheetOpen = false)}>
-  {#if topCard}
-    <div class="space-y-5">
-      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-        <div class="text-sm font-semibold">Spellings</div>
-        <div class="mt-2 flex flex-wrap gap-2">
-          {#each topCard.all_spellings?.slice(0, showAllSpellings ? 50 : 6) ?? topCard.spellings_preview as s (s)}
-            <span
-              class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-sm text-zinc-700"
-            >
-              {s}
-            </span>
-          {/each}
-        </div>
-        {#if topCard.all_spellings && topCard.all_spellings.length > 6}
-          <button
-            type="button"
-            class="mt-3 text-sm font-medium text-indigo-600 hover:underline"
-            onclick={() => (showAllSpellings = !showAllSpellings)}
-          >
-            {showAllSpellings ? 'Show fewer' : 'See all spellings'}
-          </button>
-        {/if}
-
-        {#if topCard.within_concept_variants?.length}
-          <div class="mt-4 text-xs text-zinc-500">
-            Within-concept variants: {topCard.within_concept_variants.join(', ')}
-          </div>
-        {/if}
-      </div>
-
-      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-        <div class="text-sm font-semibold">Popularity (per million births)</div>
-        <div class="mt-3 space-y-2">
-          {#each topCard.per_country as c (c.country)}
-            <div class="flex items-center justify-between text-sm">
-              <div class="font-medium">{c.country}</div>
-              <div class="text-zinc-600">{Math.round(c.ppm)} ppm</div>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <div class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-        <div class="text-sm font-semibold">Rank (last 5 years)</div>
-        {#if topCard.last5_year_ranks}
-          <div class="mt-3 space-y-4">
-            {#each rankEntries(topCard.last5_year_ranks) as [country, ranks] (country)}
-              <div>
-                <div class="text-xs font-semibold text-zinc-500">{country}</div>
-                <div class="mt-2 grid grid-cols-5 gap-2 text-center text-xs">
-                  {#each ranks as r (r.year)}
-                    <div class="rounded-xl border border-zinc-200 bg-white p-2">
-                      <div class="text-zinc-500">{r.year}</div>
-                      <div class="mt-1 font-semibold">#{r.rank}</div>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <div class="mt-2 text-sm text-zinc-600">Not available in mock data.</div>
-        {/if}
-      </div>
-    </div>
-  {/if}
-</BottomSheet>
