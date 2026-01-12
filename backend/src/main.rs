@@ -1,3 +1,4 @@
+mod bootstrap;
 mod routes;
 mod state;
 
@@ -11,6 +12,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+use crate::bootstrap::bootstrap_admin;
 use crate::routes::router;
 use crate::state::AppState;
 
@@ -26,6 +28,18 @@ struct Args {
     /// Directory of static assets to serve (PWA build output).
     #[arg(long, default_value = "web/public")]
     static_dir: PathBuf,
+
+    /// Mark session cookies as Secure (required behind HTTPS).
+    #[arg(long)]
+    cookie_secure: bool,
+
+    /// Bootstrap the first admin user if the DB has no users (exits after running).
+    #[arg(long)]
+    bootstrap_admin_username: Option<String>,
+
+    /// Password for `--bootstrap-admin-username` (min 8 chars).
+    #[arg(long)]
+    bootstrap_admin_password: Option<String>,
 }
 
 #[tokio::main]
@@ -42,8 +56,20 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("create dir {parent:?}"))?;
 
-    let state = AppState::new(&args.app_db).await?;
+    let state = AppState::new(&args.app_db, args.cookie_secure).await?;
     state.migrate().await?;
+
+    if args.bootstrap_admin_username.is_some() || args.bootstrap_admin_password.is_some() {
+        let Some(username) = args.bootstrap_admin_username else {
+            bail!("missing --bootstrap-admin-username");
+        };
+        let Some(password) = args.bootstrap_admin_password else {
+            bail!("missing --bootstrap-admin-password");
+        };
+        bootstrap_admin(&state.db, &username, &password).await?;
+        tracing::info!("bootstrap_admin_done");
+        return Ok(());
+    }
 
     let static_service = ServeDir::new(&args.static_dir).append_index_html_on_directories(true);
     let app = router(state)

@@ -145,7 +145,7 @@ async fn login_impl(
 
     let cookie = Cookie::build((SESSION_COOKIE, token))
         .http_only(true)
-        .secure(false)
+        .secure(state.cookie_secure)
         .same_site(SameSite::Lax)
         .path("/")
         .build();
@@ -171,7 +171,7 @@ pub(crate) async fn logout(State(state): State<AppState>, jar: CookieJar) -> imp
         .await
         .ok();
 
-    let jar = jar.remove(Cookie::from(SESSION_COOKIE));
+    let jar = jar.remove(Cookie::build((SESSION_COOKIE, "")).path("/").build());
     (jar, StatusCode::NO_CONTENT).into_response()
 }
 

@@ -120,13 +120,12 @@ async fn create_user_impl(state: &AppState, req: CreateUserRequest) -> Result<Us
         bail!("password too short");
     }
 
-    let active_users: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM app_user WHERE deleted_at IS NULL")
-            .fetch_one(&state.db)
-            .await
-            .context("count active users")?;
-    if active_users >= 2 {
-        bail!("max 2 active users");
+    let total_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_user")
+        .fetch_one(&state.db)
+        .await
+        .context("count users")?;
+    if total_users >= 2 {
+        bail!("max 2 users");
     }
 
     let now = now_ts();

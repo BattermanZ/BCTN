@@ -7,10 +7,11 @@ use sqlx::{Pool, Sqlite};
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) db: Pool<Sqlite>,
+    pub(crate) cookie_secure: bool,
 }
 
 impl AppState {
-    pub(crate) async fn new(app_db: &Path) -> Result<Self> {
+    pub(crate) async fn new(app_db: &Path, cookie_secure: bool) -> Result<Self> {
         let opts = SqliteConnectOptions::new()
             .filename(app_db)
             .create_if_missing(true)
@@ -22,7 +23,7 @@ impl AppState {
             .await
             .with_context(|| format!("open app db {app_db:?}"))?;
 
-        Ok(Self { db })
+        Ok(Self { db, cookie_secure })
     }
 
     pub(crate) async fn migrate(&self) -> Result<()> {

@@ -2,6 +2,9 @@ pub(crate) mod admin;
 pub(crate) mod auth;
 pub(crate) mod settings;
 
+#[cfg(test)]
+mod tests;
+
 use axum::Router;
 use axum::routing::{get, post};
 
