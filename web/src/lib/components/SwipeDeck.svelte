@@ -315,81 +315,85 @@
       </button>
     </div>
 
-    <div class="relative h-[62vh] min-h-[480px]">
-      <!-- back -->
-      {#if backCard}
-        <div
-          class="pointer-events-none absolute inset-0 z-0"
-          style={`transform: translate3d(0, ${18 - promoteT * 8}px, 0) scale(${0.94 + promoteT * 0.03});`}
-        >
-          <NameCard
-            card={backCard}
-            showLastName={$settings.showLastName}
-            lastName={$settings.lastName}
-            selectedCountries={$filters.countries}
-            showScore={$settings.bestPickMode}
-            className="h-full"
-          />
-        </div>
-      {/if}
-
-      <!-- middle -->
-      {#if midCard}
-        <div
-          class="pointer-events-none absolute inset-0 z-10"
-          style={`transform: translate3d(0, ${10 - promoteT * 10}px, 0) scale(${0.97 + promoteT * 0.03});`}
-        >
-          <NameCard
-            card={midCard}
-            showLastName={$settings.showLastName}
-            lastName={$settings.lastName}
-            selectedCountries={$filters.countries}
-            showScore={$settings.bestPickMode}
-            className="h-full"
-          />
-        </div>
-      {/if}
-
-      <!-- top (interactive) -->
+    <div class="relative flex items-center justify-center">
       <div
-        class="relative z-20 touch-none"
-        style={`transform: translate3d(${topX}px, ${topY}px, 0) rotate(${topRotate}deg);`}
-        onpointerdown={onPointerDown}
-        onpointermove={onPointerMove}
-        onpointerup={onPointerUp}
-        onpointercancel={onPointerCancel}
-        onkeydown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            openDetails();
-          }
-        }}
-        role="button"
-        tabindex="0"
+        class="relative aspect-square w-[min(92vw,420px)] touch-none select-none overscroll-contain"
       >
-        <NameCard
-          card={topCard}
-          showLastName={$settings.showLastName}
-          lastName={$settings.lastName}
-          selectedCountries={$filters.countries}
-          showScore={$settings.bestPickMode}
-          className="h-full"
-        />
-
-        {#if label.label}
+        <!-- back -->
+        {#if backCard}
           <div
-            class={`pointer-events-none absolute left-6 top-6 rounded-2xl border px-3 py-1 text-sm font-bold tracking-wide ${
-              label.tone === 'teal'
-                ? 'border-teal-300 bg-teal-50 text-teal-800'
-                : label.tone === 'rose'
-                  ? 'border-rose-300 bg-rose-50 text-rose-800'
-                  : 'border-amber-300 bg-amber-50 text-amber-900'
-            }`}
-            transition:fade={{ duration: 80 }}
+            class="pointer-events-none absolute inset-0 z-0"
+            style={`transform: translate3d(0, ${18 - promoteT * 8}px, 0) scale(${0.94 + promoteT * 0.03});`}
           >
-            {label.label}
+            <NameCard
+              card={backCard}
+              showLastName={$settings.showLastName}
+              lastName={$settings.lastName}
+              selectedCountries={$filters.countries}
+              showScore={$settings.bestPickMode}
+              className="h-full w-full"
+            />
           </div>
         {/if}
+
+        <!-- middle -->
+        {#if midCard}
+          <div
+            class="pointer-events-none absolute inset-0 z-10"
+            style={`transform: translate3d(0, ${10 - promoteT * 10}px, 0) scale(${0.97 + promoteT * 0.03});`}
+          >
+            <NameCard
+              card={midCard}
+              showLastName={$settings.showLastName}
+              lastName={$settings.lastName}
+              selectedCountries={$filters.countries}
+              showScore={$settings.bestPickMode}
+              className="h-full w-full"
+            />
+          </div>
+        {/if}
+
+        <!-- top (interactive) -->
+        <div
+          class="absolute inset-0 z-20 origin-center touch-none"
+          style={`transform: translate3d(${topX}px, ${topY}px, 0) rotate(${topRotate}deg);`}
+          onpointerdown={onPointerDown}
+          onpointermove={onPointerMove}
+          onpointerup={onPointerUp}
+          onpointercancel={onPointerCancel}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              openDetails();
+            }
+          }}
+          role="button"
+          tabindex="0"
+        >
+          <NameCard
+            card={topCard}
+            showLastName={$settings.showLastName}
+            lastName={$settings.lastName}
+            selectedCountries={$filters.countries}
+            showScore={$settings.bestPickMode}
+            className="h-full w-full"
+          />
+
+          {#if label.label}
+            <div
+              class={`pointer-events-none absolute left-6 top-6 rounded-2xl border px-3 py-1 text-sm font-bold tracking-wide ${
+                label.tone === 'teal'
+                  ? 'border-teal-300 bg-teal-50 text-teal-800'
+                  : label.tone === 'rose'
+                    ? 'border-rose-300 bg-rose-50 text-rose-800'
+                    : 'border-amber-300 bg-amber-50 text-amber-900'
+              }`}
+              transition:fade={{ duration: 80 }}
+            >
+              {label.label}
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 
