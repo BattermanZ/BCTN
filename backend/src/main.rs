@@ -19,9 +19,6 @@ use crate::state::AppState;
 #[derive(Debug, Parser)]
 #[command(name = "bctn", version)]
 struct Args {
-    #[arg(long, env = "BCTN_BIND", default_value = "127.0.0.1:8080")]
-    bind: SocketAddr,
-
     #[arg(long, env = "BCTN_APP_DB", default_value = "data/bctn_app.sqlite")]
     app_db: PathBuf,
 
@@ -78,10 +75,11 @@ async fn main() -> Result<()> {
         .nest_service("/", static_service)
         .layer(TraceLayer::new_for_http());
 
-    let listener = TcpListener::bind(args.bind)
+    let bind: SocketAddr = "0.0.0.0:2286".parse().expect("valid bind addr");
+    let listener = TcpListener::bind(bind)
         .await
-        .with_context(|| format!("bind {}", args.bind))?;
-    tracing::info!(bind=%args.bind, static_dir=%args.static_dir.display(), "backend_start");
+        .with_context(|| format!("bind {bind}"))?;
+    tracing::info!(bind=%bind, static_dir=%args.static_dir.display(), "backend_start");
     axum::serve(listener, app).await.context("serve")?;
     Ok(())
 }
