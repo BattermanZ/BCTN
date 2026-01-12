@@ -54,18 +54,16 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
 
     let tx = conn.transaction()?;
 
-    if args.rebuild {
-        tx.execute_batch(
-            r#"
-            DELETE FROM variant_group_country_top100_any;
-            DELETE FROM variant_group_country_window_total;
-            DELETE FROM concept_country_top100_any;
-            DELETE FROM concept_country_window_total;
-            DELETE FROM variant_group_member;
-            DELETE FROM variant_group;
-            "#,
-        )?;
-    }
+    tx.execute_batch(
+        r#"
+        DELETE FROM variant_group_country_top100_any;
+        DELETE FROM variant_group_country_window_total;
+        DELETE FROM concept_country_top100_any;
+        DELETE FROM concept_country_window_total;
+        DELETE FROM variant_group_member;
+        DELETE FROM variant_group;
+        "#,
+    )?;
 
     materialize_groups(&tx)?;
     materialize_concept_stats(&tx)?;

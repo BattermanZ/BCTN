@@ -145,8 +145,4 @@ pub(crate) struct VariantsBuildEnsembleArgs {
 pub(crate) struct VariantsMaterializeArgs {
     #[arg(long, default_value = "data/bctn.sqlite")]
     pub(crate) db: PathBuf,
-
-    /// Rebuild variant groups + stats tables (derived data).
-    #[arg(long, default_value_t = true)]
-    pub(crate) rebuild: bool,
 }

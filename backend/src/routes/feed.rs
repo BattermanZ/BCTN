@@ -283,7 +283,8 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
             .context("load best_pick_mode")?
             .unwrap_or(0);
 
-    let mut candidates = load_candidates(state, user_id, 3000).await?;
+    let candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
+    let mut candidates = load_candidates(state, user_id, candidate_limit).await?;
 
     candidates.retain(|c| {
         let totals = state.country_total_births;
@@ -398,63 +399,68 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
 async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<Vec<CandidateCard>> {
     let rows = sqlx::query(
         r#"
-        SELECT
-          'group' AS card_kind,
-          vg.variant_group_key AS card_key,
-          ns.display AS display_name,
-          COALESCE(us.total, 0) AS us_total,
-          COALESCE(us.male, 0) AS us_male,
-          COALESCE(us.female, 0) AS us_female,
-          COALESCE(ust.top100_any, 0) AS us_top,
-          COALESCE(fr.total, 0) AS fr_total,
-          COALESCE(fr.male, 0) AS fr_male,
-          COALESCE(fr.female, 0) AS fr_female,
-          COALESCE(frt.top100_any, 0) AS fr_top,
-          COALESCE(cl.total, 0) AS cl_total,
-          COALESCE(cl.male, 0) AS cl_male,
-          COALESCE(cl.female, 0) AS cl_female,
-          COALESCE(clt.top100_any, 0) AS cl_top
-        FROM variant_group vg
-        JOIN name_concept nc ON nc.concept_key = vg.variant_group_key
-        JOIN name_string ns ON ns.id = nc.preferred_name_string_id
-        LEFT JOIN variant_group_country_window_total us ON us.variant_group_key = vg.variant_group_key AND us.country='US'
-        LEFT JOIN variant_group_country_top100_any ust ON ust.variant_group_key = vg.variant_group_key AND ust.country='US'
-        LEFT JOIN variant_group_country_window_total fr ON fr.variant_group_key = vg.variant_group_key AND fr.country='FR'
-        LEFT JOIN variant_group_country_top100_any frt ON frt.variant_group_key = vg.variant_group_key AND frt.country='FR'
-        LEFT JOIN variant_group_country_window_total cl ON cl.variant_group_key = vg.variant_group_key AND cl.country='CL'
-        LEFT JOIN variant_group_country_top100_any clt ON clt.variant_group_key = vg.variant_group_key AND clt.country='CL'
-        WHERE NOT EXISTS (SELECT 1 FROM swipe s WHERE s.user_id = ?1 AND s.card_key = vg.variant_group_key)
+        WITH cards AS (
+          SELECT
+            'group' AS card_kind,
+            vg.variant_group_key AS card_key,
+            ns.display AS display_name,
+            COALESCE(us.total, 0) AS us_total,
+            COALESCE(us.male, 0) AS us_male,
+            COALESCE(us.female, 0) AS us_female,
+            COALESCE(ust.top100_any, 0) AS us_top,
+            COALESCE(fr.total, 0) AS fr_total,
+            COALESCE(fr.male, 0) AS fr_male,
+            COALESCE(fr.female, 0) AS fr_female,
+            COALESCE(frt.top100_any, 0) AS fr_top,
+            COALESCE(cl.total, 0) AS cl_total,
+            COALESCE(cl.male, 0) AS cl_male,
+            COALESCE(cl.female, 0) AS cl_female,
+            COALESCE(clt.top100_any, 0) AS cl_top,
+            COALESCE(us.total, 0) + COALESCE(fr.total, 0) + COALESCE(cl.total, 0) AS global_total
+          FROM variant_group vg
+          JOIN name_concept nc ON nc.concept_key = vg.variant_group_key
+          JOIN name_string ns ON ns.id = nc.preferred_name_string_id
+          LEFT JOIN variant_group_country_window_total us ON us.variant_group_key = vg.variant_group_key AND us.country='US'
+          LEFT JOIN variant_group_country_top100_any ust ON ust.variant_group_key = vg.variant_group_key AND ust.country='US'
+          LEFT JOIN variant_group_country_window_total fr ON fr.variant_group_key = vg.variant_group_key AND fr.country='FR'
+          LEFT JOIN variant_group_country_top100_any frt ON frt.variant_group_key = vg.variant_group_key AND frt.country='FR'
+          LEFT JOIN variant_group_country_window_total cl ON cl.variant_group_key = vg.variant_group_key AND cl.country='CL'
+          LEFT JOIN variant_group_country_top100_any clt ON clt.variant_group_key = vg.variant_group_key AND clt.country='CL'
+          WHERE NOT EXISTS (SELECT 1 FROM swipe s WHERE s.user_id = ?1 AND s.card_key = vg.variant_group_key)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT
-          'concept' AS card_kind,
-          nc.concept_key AS card_key,
-          ns.display AS display_name,
-          COALESCE(us.total, 0) AS us_total,
-          COALESCE(us.male, 0) AS us_male,
-          COALESCE(us.female, 0) AS us_female,
-          COALESCE(ust.top100_any, 0) AS us_top,
-          COALESCE(fr.total, 0) AS fr_total,
-          COALESCE(fr.male, 0) AS fr_male,
-          COALESCE(fr.female, 0) AS fr_female,
-          COALESCE(frt.top100_any, 0) AS fr_top,
-          COALESCE(cl.total, 0) AS cl_total,
-          COALESCE(cl.male, 0) AS cl_male,
-          COALESCE(cl.female, 0) AS cl_female,
-          COALESCE(clt.top100_any, 0) AS cl_top
-        FROM name_concept nc
-        JOIN name_string ns ON ns.id = nc.preferred_name_string_id
-        LEFT JOIN variant_group_member vgm ON vgm.concept_key = nc.concept_key
-        LEFT JOIN concept_country_window_total us ON us.concept_id = nc.id AND us.country='US'
-        LEFT JOIN concept_country_top100_any ust ON ust.concept_id = nc.id AND ust.country='US'
-        LEFT JOIN concept_country_window_total fr ON fr.concept_id = nc.id AND fr.country='FR'
-        LEFT JOIN concept_country_top100_any frt ON frt.concept_id = nc.id AND frt.country='FR'
-        LEFT JOIN concept_country_window_total cl ON cl.concept_id = nc.id AND cl.country='CL'
-        LEFT JOIN concept_country_top100_any clt ON clt.concept_id = nc.id AND clt.country='CL'
-        WHERE vgm.concept_key IS NULL
-          AND NOT EXISTS (SELECT 1 FROM swipe s WHERE s.user_id = ?1 AND s.card_key = nc.concept_key)
-
+          SELECT
+            'concept' AS card_kind,
+            nc.concept_key AS card_key,
+            ns.display AS display_name,
+            COALESCE(us.total, 0) AS us_total,
+            COALESCE(us.male, 0) AS us_male,
+            COALESCE(us.female, 0) AS us_female,
+            COALESCE(ust.top100_any, 0) AS us_top,
+            COALESCE(fr.total, 0) AS fr_total,
+            COALESCE(fr.male, 0) AS fr_male,
+            COALESCE(fr.female, 0) AS fr_female,
+            COALESCE(frt.top100_any, 0) AS fr_top,
+            COALESCE(cl.total, 0) AS cl_total,
+            COALESCE(cl.male, 0) AS cl_male,
+            COALESCE(cl.female, 0) AS cl_female,
+            COALESCE(clt.top100_any, 0) AS cl_top,
+            COALESCE(us.total, 0) + COALESCE(fr.total, 0) + COALESCE(cl.total, 0) AS global_total
+          FROM name_concept nc
+          JOIN name_string ns ON ns.id = nc.preferred_name_string_id
+          LEFT JOIN variant_group_member vgm ON vgm.concept_key = nc.concept_key
+          LEFT JOIN concept_country_window_total us ON us.concept_id = nc.id AND us.country='US'
+          LEFT JOIN concept_country_top100_any ust ON ust.concept_id = nc.id AND ust.country='US'
+          LEFT JOIN concept_country_window_total fr ON fr.concept_id = nc.id AND fr.country='FR'
+          LEFT JOIN concept_country_top100_any frt ON frt.concept_id = nc.id AND frt.country='FR'
+          LEFT JOIN concept_country_window_total cl ON cl.concept_id = nc.id AND cl.country='CL'
+          LEFT JOIN concept_country_top100_any clt ON clt.concept_id = nc.id AND clt.country='CL'
+          WHERE vgm.concept_key IS NULL
+            AND NOT EXISTS (SELECT 1 FROM swipe s WHERE s.user_id = ?1 AND s.card_key = nc.concept_key)
+        )
+        SELECT * FROM cards
+        ORDER BY global_total DESC, card_key ASC
         LIMIT ?2
         "#,
     )
@@ -505,57 +511,6 @@ async fn spellings_preview(
     card_key: &str,
     selected_countries: &[&'static str],
 ) -> Result<Vec<String>> {
-    async fn top1(
-        state: &AppState,
-        kind: CardKind,
-        card_key: &str,
-        run_id: i64,
-        country: &str,
-    ) -> Result<Option<String>> {
-        let sql = match kind {
-            CardKind::Concept => {
-                r#"
-                SELECT no.name_raw AS name_raw
-                FROM name_concept nc
-                JOIN name_concept_member ncm ON ncm.concept_id = nc.id
-                JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                WHERE nc.concept_key = ?1 AND no.run_id = ?2 AND no.country = ?3
-                GROUP BY no.name_raw
-                ORDER BY SUM(no.count) DESC
-                LIMIT 1
-                "#
-            }
-            CardKind::Group => {
-                r#"
-                WITH concept_ids AS (
-                  SELECT nc.id AS id
-                  FROM variant_group_member vgm
-                  JOIN name_concept nc ON nc.concept_key = vgm.concept_key
-                  WHERE vgm.variant_group_key = ?1
-                )
-                SELECT no.name_raw AS name_raw
-                FROM name_concept_member ncm
-                JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                WHERE ncm.concept_id IN (SELECT id FROM concept_ids)
-                  AND no.run_id = ?2
-                  AND no.country = ?3
-                GROUP BY no.name_raw
-                ORDER BY SUM(no.count) DESC
-                LIMIT 1
-                "#
-            }
-        };
-
-        let v = sqlx::query_scalar::<_, String>(sql)
-            .bind(card_key)
-            .bind(run_id)
-            .bind(country)
-            .fetch_optional(&state.names_db)
-            .await
-            .with_context(|| format!("top spelling for {card_key} {country}"))?;
-        Ok(v)
-    }
-
     async fn global_top_n(
         state: &AppState,
         kind: CardKind,
@@ -611,14 +566,96 @@ async fn spellings_preview(
         Ok(out)
     }
 
+    async fn top1_per_country(
+        state: &AppState,
+        kind: CardKind,
+        card_key: &str,
+        run_id: i64,
+        countries: &[&str],
+    ) -> Result<Vec<(String, String)>> {
+        let placeholders = countries.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = match kind {
+            CardKind::Concept => format!(
+                r#"
+                WITH spellings AS (
+                  SELECT
+                    no.country AS country,
+                    no.name_raw AS name_raw,
+                    SUM(no.count) AS total
+                  FROM name_concept nc
+                  JOIN name_concept_member ncm ON ncm.concept_id = nc.id
+                  JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+                  WHERE nc.concept_key = ?1
+                    AND no.run_id = ?2
+                    AND no.country IN ({placeholders})
+                  GROUP BY no.country, no.name_raw
+                ),
+                ranked AS (
+                  SELECT
+                    country,
+                    name_raw,
+                    total,
+                    ROW_NUMBER() OVER (PARTITION BY country ORDER BY total DESC, name_raw ASC) AS rn
+                  FROM spellings
+                )
+                SELECT country, name_raw FROM ranked WHERE rn = 1
+                "#
+            ),
+            CardKind::Group => format!(
+                r#"
+                WITH concept_ids AS (
+                  SELECT nc.id AS id
+                  FROM variant_group_member vgm
+                  JOIN name_concept nc ON nc.concept_key = vgm.concept_key
+                  WHERE vgm.variant_group_key = ?1
+                ),
+                spellings AS (
+                  SELECT
+                    no.country AS country,
+                    no.name_raw AS name_raw,
+                    SUM(no.count) AS total
+                  FROM name_concept_member ncm
+                  JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+                  WHERE ncm.concept_id IN (SELECT id FROM concept_ids)
+                    AND no.run_id = ?2
+                    AND no.country IN ({placeholders})
+                  GROUP BY no.country, no.name_raw
+                ),
+                ranked AS (
+                  SELECT
+                    country,
+                    name_raw,
+                    total,
+                    ROW_NUMBER() OVER (PARTITION BY country ORDER BY total DESC, name_raw ASC) AS rn
+                  FROM spellings
+                )
+                SELECT country, name_raw FROM ranked WHERE rn = 1
+                "#
+            ),
+        };
+
+        let mut q = sqlx::query(&sql).bind(card_key).bind(run_id);
+        for c in countries {
+            q = q.bind(*c);
+        }
+        let rows = q.fetch_all(&state.names_db).await?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push((
+                r.try_get::<String, _>("country")?,
+                r.try_get::<String, _>("name_raw")?,
+            ));
+        }
+        Ok(out)
+    }
+
     let run_id = state.names_window.run_id;
 
     let mut country_tops = Vec::new();
-    for &country in selected_countries {
-        if let Some(v) = top1(state, kind, card_key, run_id, country).await?
-            && !country_tops.contains(&v)
-        {
-            country_tops.push(v);
+    let top1s = top1_per_country(state, kind, card_key, run_id, selected_countries).await?;
+    for (_country, name_raw) in top1s {
+        if !country_tops.contains(&name_raw) {
+            country_tops.push(name_raw);
         }
     }
 

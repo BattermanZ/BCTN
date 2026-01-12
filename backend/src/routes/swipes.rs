@@ -194,23 +194,14 @@ async fn undo_impl(state: &AppState, jar: &CookieJar) -> Result<UndoSwipeRespons
 
     let mut match_removed = false;
     if action == "like" || action == "superlike" {
-        let partner_id = partner_user_id(state, user_id).await?;
-        let partner_like: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM swipe WHERE user_id=?1 AND card_key=?2 AND action IN ('like','superlike') LIMIT 1",
-        )
-        .bind(partner_id)
-        .bind(&card_key)
-        .fetch_optional(&state.db)
-        .await?;
-
-        if partner_like.is_none() {
-            let res = sqlx::query("DELETE FROM name_match WHERE card_key=?1")
-                .bind(&card_key)
-                .execute(&state.db)
-                .await?;
-            if res.rows_affected() > 0 {
-                match_removed = true;
-            }
+        // A match exists only when both users like/superlike the same card.
+        // Undoing our own like/superlike breaks mutuality, so the match must be removed.
+        let res = sqlx::query("DELETE FROM name_match WHERE card_key=?1")
+            .bind(&card_key)
+            .execute(&state.db)
+            .await?;
+        if res.rows_affected() > 0 {
+            match_removed = true;
         }
     }
 
