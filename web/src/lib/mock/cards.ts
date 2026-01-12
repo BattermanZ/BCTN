@@ -88,7 +88,7 @@ export const mockCards: Card[] = [
       stats('US', 130, 'male', false),
       stats('CL', 120, 'unisex', false),
     ],
-    all_spellings: ['Noa', 'Noah', 'Noahh', 'Noahh'],
+    all_spellings: ['Noa', 'Noah', 'Noahh'],
     within_concept_variants: ['NOA'],
   },
   {

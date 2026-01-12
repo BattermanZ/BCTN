@@ -21,6 +21,8 @@
   const current = $derived(cards[index]);
   const remaining = $derived(cards.length - index);
 
+  let history = $state<string[]>([]);
+
   function resetDrag() {
     dragging = false;
     startX = 0;
@@ -53,12 +55,16 @@
 
     const likeThreshold = 110;
     const superLikeThreshold = 90;
+    const tapThreshold = 8;
 
     if (absX > absY && absX > likeThreshold) {
       void commitSwipe(dx > 0 ? 'like' : 'nope');
     } else if (-dy > superLikeThreshold && absY > absX) {
       void commitSwipe('superlike');
     } else {
+      if (absX < tapThreshold && absY < tapThreshold) {
+        openDetails();
+      }
       resetDrag();
     }
   }
@@ -76,6 +82,8 @@
   async function commitSwipe(action: SwipeAction) {
     if (!current) return;
     const cardKey = current.card_key;
+
+    history = [...history, cardKey];
 
     swipes.update((s) => ({
       ...s,
@@ -99,14 +107,20 @@
   }
 
   function undo() {
+    const lastKey = history.at(-1);
+    if (!lastKey) return;
+
+    history = history.slice(0, -1);
     swipes.update((s) => {
-      const last = s.lastAction;
-      if (!last) return s;
       const nextBy = { ...s.byCardKey };
-      delete nextBy[last.card_key];
+      delete nextBy[lastKey];
       return { ...s, byCardKey: nextBy, lastAction: undefined };
     });
-    if (index > 0) {
+
+    const pos = cards.findIndex((c) => c.card_key === lastKey);
+    if (pos >= 0) {
+      index = pos;
+    } else if (index > 0) {
       index -= 1;
     }
   }
@@ -179,7 +193,6 @@
         }}
         role="button"
         tabindex="0"
-        onclick={openDetails}
       >
         <NameCard
           card={current}
