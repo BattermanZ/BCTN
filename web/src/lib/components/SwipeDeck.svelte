@@ -3,7 +3,6 @@
   import NameCard from '$lib/components/NameCard.svelte';
   import type { Card, CountryCode, SwipeAction } from '$lib/types';
   import { filters, settings, swipes } from '$lib/stores/app';
-  import { tick } from 'svelte';
   import { fade } from 'svelte/transition';
 
   type Props = { cards: Card[] };
@@ -14,43 +13,79 @@
   let showAllSpellings = $state(false);
 
   let dragging = $state(false);
+  let activePointerId = $state<number | null>(null);
   let startX = $state(0);
   let startY = $state(0);
   let dx = $state(0);
   let dy = $state(0);
 
-  const current = $derived(cards[index]);
   const remaining = $derived(cards.length - index);
 
+  const topCard = $derived(cards[index]);
+  const midCard = $derived(cards[index + 1]);
+  const backCard = $derived(cards[index + 2]);
+
+  type MoveSample = { t: number; dx: number; dy: number };
+  let samples = $state<MoveSample[]>([]);
+
+  let animating = $state(false);
+  let animX = $state(0);
+  let animY = $state(0);
+  let rafId = $state<number | null>(null);
+
   let history = $state<string[]>([]);
-  let suppressTransition = $state(false);
+
+  const topX = $derived(dragging ? dx : animating ? animX : 0);
+  const topY = $derived(dragging ? dy : animating ? animY : 0);
+  const topRotate = $derived(topX / 18);
 
   function resetDrag() {
     dragging = false;
+    activePointerId = null;
     startX = 0;
     startY = 0;
     dx = 0;
     dy = 0;
+    samples = [];
+  }
+
+  function resetAnimation() {
+    animating = false;
+    animX = 0;
+    animY = 0;
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
   }
 
   function onPointerDown(e: PointerEvent) {
-    if (!current) return;
+    if (!topCard) return;
+    if (dragging) return;
+    if (animating) return;
     dragging = true;
+    activePointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
     dx = 0;
     dy = 0;
+    samples = [{ t: performance.now(), dx: 0, dy: 0 }];
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function onPointerMove(e: PointerEvent) {
     if (!dragging) return;
+    if (activePointerId !== e.pointerId) return;
     dx = e.clientX - startX;
     dy = e.clientY - startY;
+
+    const now = performance.now();
+    samples = [...samples, { t: now, dx, dy }].filter((s) => now - s.t <= 120).slice(-6);
   }
 
-  function onPointerUp() {
+  function onPointerUp(e: PointerEvent) {
     if (!dragging) return;
+    if (activePointerId !== e.pointerId) return;
 
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
@@ -60,15 +95,21 @@
     const tapThreshold = 8;
 
     if (absX > absY && absX > likeThreshold) {
-      void commitSwipe(dx > 0 ? 'like' : 'nope');
+      const action: SwipeAction = dx > 0 ? 'like' : 'nope';
+      void commitSwipeWithMomentum(action, { startDx: dx, startDy: dy });
     } else if (-dy > superLikeThreshold && absY > absX) {
-      void commitSwipe('superlike');
+      void commitSwipeWithMomentum('superlike', { startDx: dx, startDy: dy });
     } else {
       if (absX < tapThreshold && absY < tapThreshold) {
         openDetails();
       }
       resetDrag();
     }
+  }
+
+  function onPointerCancel(e: PointerEvent) {
+    if (activePointerId !== e.pointerId) return;
+    resetDrag();
   }
 
   function swipeLabel(): { label: string; tone: 'neutral' | 'teal' | 'rose' | 'amber' } {
@@ -81,37 +122,103 @@
 
   const label = $derived(swipeLabel());
 
-  async function commitSwipe(action: SwipeAction) {
-    if (!current) return;
-    const cardKey = current.card_key;
+  function sampleVelocity(): { vx: number; vy: number } {
+    if (samples.length < 2) return { vx: 0, vy: 0 };
+    const a = samples[samples.length - 2];
+    const b = samples[samples.length - 1];
+    const dt = Math.max(1, b.t - a.t);
+    return { vx: (b.dx - a.dx) / dt, vy: (b.dy - a.dy) / dt };
+  }
 
+  function targetForAction(
+    action: SwipeAction,
+    startDx: number,
+    startDy: number,
+    vx: number,
+    vy: number
+  ): { x: number; y: number; durationMs: number } {
+    const vw = Math.max(320, window.innerWidth || 320);
+    const vh = Math.max(480, window.innerHeight || 480);
+
+    const boostX = Math.min(520, Math.abs(vx) * 900);
+    const boostY = Math.min(520, Math.abs(vy) * 900);
+
+    if (action === 'superlike') {
+      const y = -vh * 1.1 - boostY;
+      const x = startDx + vx * 220;
+      return { x, y, durationMs: 260 };
+    }
+
+    const dir = action === 'like' ? 1 : -1;
+    const x = dir * (vw * 1.1 + boostX);
+    const y = startDy + vy * 220;
+    return { x, y, durationMs: 220 };
+  }
+
+  function animateTo(targetX: number, targetY: number, durationMs: number): Promise<void> {
+    const fromX = animX;
+    const fromY = animY;
+    const start = performance.now();
+
+    return new Promise((resolve) => {
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / durationMs);
+        const ease = 1 - Math.pow(1 - t, 3);
+        animX = fromX + (targetX - fromX) * ease;
+        animY = fromY + (targetY - fromY) * ease;
+
+        if (t < 1) {
+          rafId = requestAnimationFrame(step);
+          return;
+        }
+        rafId = null;
+        resolve();
+      };
+      rafId = requestAnimationFrame(step);
+    });
+  }
+
+  async function commitSwipeWithMomentum(
+    action: SwipeAction,
+    opts: { startDx: number; startDy: number }
+  ) {
+    if (!topCard) return;
+    if (animating) return;
+
+    const cardKey = topCard.card_key;
+    const { vx, vy } = sampleVelocity();
+
+    // lock gesture immediately
+    dragging = false;
+    activePointerId = null;
+
+    // record swipe immediately (even while animating)
     history = [...history, cardKey];
-
     swipes.update((s) => ({
       ...s,
       byCardKey: { ...s.byCardKey, [cardKey]: action },
       lastAction: { card_key: cardKey, action },
     }));
 
-    // animate off-screen quickly
-    if (action === 'superlike') {
-      dy = -420;
-      dx = 0;
-    } else {
-      dx = action === 'like' ? 420 : -420;
-      dy = 0;
-    }
-    dragging = false;
+    // animate top card off-screen
+    resetAnimation();
+    animating = true;
+    animX = opts.startDx;
+    animY = opts.startDy;
+    dx = 0;
+    dy = 0;
+    samples = [];
 
-    await new Promise((r) => setTimeout(r, 140));
-    suppressTransition = true;
+    const target = targetForAction(action, animX, animY, vx, vy);
+    await animateTo(target.x, target.y, target.durationMs);
+
+    // advance the deck only after the top card has left the screen
     index = Math.min(index + 1, cards.length);
-    resetDrag();
-    await tick();
-    suppressTransition = false;
+    resetAnimation();
   }
 
   function undo() {
+    if (dragging || animating) return;
     const lastKey = history.at(-1);
     if (!lastKey) return;
 
@@ -130,8 +237,13 @@
     }
   }
 
+  function canSwipe(): boolean {
+    return Boolean(topCard) && !dragging && !animating;
+  }
+
   function openDetails() {
-    if (!current) return;
+    if (!topCard) return;
+    if (animating) return;
     sheetOpen = true;
     showAllSpellings = false;
   }
@@ -145,7 +257,7 @@
   }
 </script>
 
-{#if !current}
+{#if !topCard}
   <div
     class="rounded-3xl border border-zinc-200 bg-white p-6 text-center dark:border-zinc-800 dark:bg-zinc-900/40"
   >
@@ -168,35 +280,46 @@
     </div>
 
     <div class="relative">
-      <!-- background stack -->
-      {#each [3, 2, 1] as depth (depth)}
-        {#if cards[index + depth]}
-          <div
-            class="pointer-events-none absolute inset-0"
-            style={`transform: translate3d(0, ${depth * 6}px, 0) scale(${1 - depth * 0.03}); opacity: ${
-              0.62 - depth * 0.14
-            };`}
-          >
-            <NameCard
-              card={cards[index + depth]}
-              showLastName={$settings.showLastName}
-              lastName={$settings.lastName}
-              selectedCountries={$filters.countries}
-              showScore={$settings.bestPickMode}
-            />
-          </div>
-        {/if}
-      {/each}
+      <!-- back -->
+      {#if backCard}
+        <div
+          class="pointer-events-none absolute inset-0 z-0"
+          style="transform: translate3d(0, 18px, 0) scale(0.94); opacity: 0.65;"
+        >
+          <NameCard
+            card={backCard}
+            showLastName={$settings.showLastName}
+            lastName={$settings.lastName}
+            selectedCountries={$filters.countries}
+            showScore={$settings.bestPickMode}
+          />
+        </div>
+      {/if}
 
+      <!-- middle -->
+      {#if midCard}
+        <div
+          class="pointer-events-none absolute inset-0 z-10"
+          style="transform: translate3d(0, 10px, 0) scale(0.97); opacity: 0.8;"
+        >
+          <NameCard
+            card={midCard}
+            showLastName={$settings.showLastName}
+            lastName={$settings.lastName}
+            selectedCountries={$filters.countries}
+            showScore={$settings.bestPickMode}
+          />
+        </div>
+      {/if}
+
+      <!-- top (interactive) -->
       <div
-        class="relative touch-none"
-        style={`transform: translate3d(${dx}px, ${dy}px, 0) rotate(${dx / 18}deg); transition: ${
-          dragging || suppressTransition ? 'none' : 'transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1)'
-        };`}
+        class="relative z-20 touch-none"
+        style={`transform: translate3d(${topX}px, ${topY}px, 0) rotate(${topRotate}deg);`}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
-        onpointercancel={onPointerUp}
+        onpointercancel={onPointerCancel}
         onkeydown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -207,7 +330,7 @@
         tabindex="0"
       >
         <NameCard
-          card={current}
+          card={topCard}
           showLastName={$settings.showLastName}
           lastName={$settings.lastName}
           selectedCountries={$filters.countries}
@@ -235,21 +358,24 @@
       <button
         type="button"
         class="rounded-full border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 shadow-sm hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/70"
-        onclick={() => commitSwipe('nope')}
+        onclick={() => commitSwipeWithMomentum('nope', { startDx: 0, startDy: 0 })}
+        disabled={!canSwipe()}
       >
         Nope
       </button>
       <button
         type="button"
         class="rounded-full border border-teal-200 bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-800 shadow-sm hover:bg-teal-100 dark:border-teal-900/60 dark:bg-teal-950/40 dark:text-teal-200 dark:hover:bg-teal-950/70"
-        onclick={() => commitSwipe('like')}
+        onclick={() => commitSwipeWithMomentum('like', { startDx: 0, startDy: 0 })}
+        disabled={!canSwipe()}
       >
         Like
       </button>
       <button
         type="button"
         class="rounded-full border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 shadow-sm hover:bg-amber-100 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/70"
-        onclick={() => commitSwipe('superlike')}
+        onclick={() => commitSwipeWithMomentum('superlike', { startDx: 0, startDy: 0 })}
+        disabled={!canSwipe()}
       >
         Super
       </button>
@@ -257,15 +383,15 @@
   </div>
 {/if}
 
-<BottomSheet open={sheetOpen} title={current?.display_name} onClose={() => (sheetOpen = false)}>
-  {#if current}
+<BottomSheet open={sheetOpen} title={topCard?.display_name} onClose={() => (sheetOpen = false)}>
+  {#if topCard}
     <div class="space-y-5">
       <div
         class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/30"
       >
         <div class="text-sm font-semibold">Spellings</div>
         <div class="mt-2 flex flex-wrap gap-2">
-          {#each current.all_spellings?.slice(0, showAllSpellings ? 50 : 6) ?? current.spellings_preview as s (s)}
+          {#each topCard.all_spellings?.slice(0, showAllSpellings ? 50 : 6) ?? topCard.spellings_preview as s (s)}
             <span
               class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200"
             >
@@ -273,7 +399,7 @@
             </span>
           {/each}
         </div>
-        {#if current.all_spellings && current.all_spellings.length > 6}
+        {#if topCard.all_spellings && topCard.all_spellings.length > 6}
           <button
             type="button"
             class="mt-3 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
@@ -283,9 +409,9 @@
           </button>
         {/if}
 
-        {#if current.within_concept_variants?.length}
+        {#if topCard.within_concept_variants?.length}
           <div class="mt-4 text-xs text-zinc-500 dark:text-zinc-300">
-            Within-concept variants: {current.within_concept_variants.join(', ')}
+            Within-concept variants: {topCard.within_concept_variants.join(', ')}
           </div>
         {/if}
       </div>
@@ -295,7 +421,7 @@
       >
         <div class="text-sm font-semibold">Popularity (per million births)</div>
         <div class="mt-3 space-y-2">
-          {#each current.per_country as c (c.country)}
+          {#each topCard.per_country as c (c.country)}
             <div class="flex items-center justify-between text-sm">
               <div class="font-medium">{c.country}</div>
               <div class="text-zinc-600 dark:text-zinc-200">{Math.round(c.ppm)} ppm</div>
@@ -308,9 +434,9 @@
         class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/30"
       >
         <div class="text-sm font-semibold">Rank (last 5 years)</div>
-        {#if current.last5_year_ranks}
+        {#if topCard.last5_year_ranks}
           <div class="mt-3 space-y-4">
-            {#each rankEntries(current.last5_year_ranks) as [country, ranks] (country)}
+            {#each rankEntries(topCard.last5_year_ranks) as [country, ranks] (country)}
               <div>
                 <div class="text-xs font-semibold text-zinc-500 dark:text-zinc-300">{country}</div>
                 <div class="mt-2 grid grid-cols-5 gap-2 text-center text-xs">
