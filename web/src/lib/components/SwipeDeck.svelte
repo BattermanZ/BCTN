@@ -50,6 +50,9 @@
 
   let history = $state<Array<{ card: Card; action: SwipeAction }>>([]);
 
+  let matchFlash = $state<{ name: string } | null>(null);
+  let matchFlashTimer = $state<number | null>(null);
+
   const topX = $derived(dragging ? dx : animating ? animX : 0);
   const topY = $derived(dragging ? dy : animating ? animY : 0);
   const topRotate = $derived(topX / 18);
@@ -245,8 +248,18 @@
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
       if (promoteRafId !== null) cancelAnimationFrame(promoteRafId);
+      if (matchFlashTimer !== null) window.clearTimeout(matchFlashTimer);
     };
   });
+
+  function showMatchFlash(name: string) {
+    matchFlash = { name };
+    if (matchFlashTimer !== null) window.clearTimeout(matchFlashTimer);
+    matchFlashTimer = window.setTimeout(() => {
+      matchFlash = null;
+      matchFlashTimer = null;
+    }, 1100);
+  }
 
   function onPointerDown(e: PointerEvent) {
     if (!topCard) return;
@@ -419,7 +432,12 @@
       byCardKey: { ...s.byCardKey, [cardKey]: action },
       lastAction: { card_key: cardKey, action },
     }));
-    void api.createSwipe({ card_key: cardKey, card_kind: swipedCard.card_kind, action });
+    void api
+      .createSwipe({ card_key: cardKey, card_kind: swipedCard.card_kind, action })
+      .then((res) => {
+        if (res.match_created) showMatchFlash(swipedCard.display_name);
+      })
+      .catch(() => {});
 
     // animate top card off-screen
     resetAnimation();
@@ -588,6 +606,34 @@
       <div
         class="relative aspect-square w-[min(92vw,420px)] touch-none select-none overscroll-contain"
       >
+        {#if matchFlash}
+          <div
+            class="pointer-events-none absolute inset-0 z-40 flex items-center justify-center"
+            transition:fade={{ duration: 160 }}
+          >
+            <div
+              class="match-pop rounded-3xl border border-rose-200 bg-white/95 px-6 py-5 shadow-lg"
+            >
+              <div class="flex items-center justify-center gap-3">
+                <div class="rounded-full bg-rose-50 p-3 text-rose-700">
+                  <Icon name="matches" size={28} />
+                </div>
+                <div class="text-center">
+                  <div class="text-xs font-semibold uppercase tracking-wide text-rose-600">
+                    It’s a match
+                  </div>
+                  <div class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900">
+                    {matchFlash.name}
+                  </div>
+                </div>
+              </div>
+              <div class="mt-3 h-1 w-full overflow-hidden rounded-full bg-rose-100">
+                <div class="match-bar h-full bg-rose-400"></div>
+              </div>
+            </div>
+          </div>
+        {/if}
+
         <!-- back -->
         {#if backCard}
           <div
@@ -935,3 +981,37 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .match-pop {
+    transform-origin: center;
+    animation: matchPop 300ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+  }
+
+  .match-bar {
+    width: 100%;
+    transform-origin: left;
+    animation: matchBar 1100ms linear both;
+  }
+
+  @keyframes matchPop {
+    0% {
+      transform: scale(0.92);
+    }
+    60% {
+      transform: scale(1.02);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  @keyframes matchBar {
+    0% {
+      transform: scaleX(1);
+    }
+    100% {
+      transform: scaleX(0);
+    }
+  }
+</style>
