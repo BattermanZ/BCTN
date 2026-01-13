@@ -501,3 +501,140 @@ fn materialize_card_ranks(conn: &Connection, run_id: i64) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::materialize_card_ranks;
+    use crate::db;
+    use rusqlite::{Connection, params};
+
+    fn insert_name_string(conn: &Connection, id: i64, display: &str) {
+        let norm = display.to_lowercase();
+        conn.execute(
+            "INSERT INTO name_string (id, display, norm, key_strict, key_folded) VALUES (?1,?2,?3,?4,?5)",
+            params![id, display, norm, norm, norm],
+        )
+        .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_obs(
+        conn: &Connection,
+        id: i64,
+        run_id: i64,
+        name_string_id: i64,
+        name_raw: &str,
+        country: &str,
+        year: i64,
+        count: i64,
+    ) {
+        conn.execute(
+            r#"
+            INSERT INTO name_observation
+              (id, run_id, source_id, name_string_id, name_raw, country, year, sex, sex_raw, count, proportion)
+            VALUES
+              (?1,  ?2,     1,        ?3,            ?4,       ?5,      ?6,   'M', 'M',    ?7,   NULL)
+            "#,
+            params![id, run_id, name_string_id, name_raw, country, year, count],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn materialized_ranks_follow_per_year_top_spelling() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::ensure_schema(&conn).unwrap();
+        db::ensure_indexes(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO source (id, source_key, name, country, url, license) VALUES (1,'t','t','US',NULL,NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO import_run (id, started_at, finished_at, window_start_year, window_end_year) VALUES (1,0,NULL,2005,2024)",
+            [],
+        )
+        .unwrap();
+
+        insert_name_string(&conn, 1, "A");
+        insert_name_string(&conn, 2, "B");
+        insert_name_string(&conn, 3, "Z");
+
+        conn.execute(
+            "INSERT INTO name_concept (id, concept_key, preferred_name_string_id) VALUES (10,'c1',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO name_concept (id, concept_key, preferred_name_string_id) VALUES (11,'c2',2)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO name_concept_member (concept_id, name_string_id, relation_type) VALUES (10,1,'raw')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO name_concept_member (concept_id, name_string_id, relation_type) VALUES (10,2,'raw')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO name_concept_member (concept_id, name_string_id, relation_type) VALUES (11,2,'raw')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO variant_group (variant_group_key, created_at) VALUES ('g1',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO variant_group_member (variant_group_key, concept_key) VALUES ('g1','c1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO variant_group_member (variant_group_key, concept_key) VALUES ('g1','c2')",
+            [],
+        )
+        .unwrap();
+
+        // 2023: A is top spelling for the card; B is lower. Global rank among names: Z(1), A(2), B(3).
+        insert_obs(&conn, 1, 1, 1, "A", "US", 2023, 100);
+        insert_obs(&conn, 2, 1, 2, "B", "US", 2023, 50);
+        insert_obs(&conn, 3, 1, 3, "Z", "US", 2023, 200);
+
+        // 2024: B is top spelling for the card. Global rank among names: B(1), Z(2), A(3).
+        insert_obs(&conn, 4, 1, 1, "A", "US", 2024, 40);
+        insert_obs(&conn, 5, 1, 2, "B", "US", 2024, 120);
+        insert_obs(&conn, 6, 1, 3, "Z", "US", 2024, 80);
+
+        materialize_card_ranks(&conn, 1).unwrap();
+
+        let ranks: Vec<(i64, i64)> = conn
+            .prepare(
+                "SELECT year, rank FROM card_rank_last5 WHERE card_kind='concept' AND card_key='c1' AND country='US' ORDER BY year",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(ranks, vec![(2023, 2), (2024, 1)]);
+
+        let group_ranks: Vec<(i64, i64)> = conn
+            .prepare(
+                "SELECT year, rank FROM card_rank_last5 WHERE card_kind='group' AND card_key='g1' AND country='US' ORDER BY year",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(group_ranks, vec![(2023, 2), (2024, 1)]);
+    }
+}
