@@ -55,9 +55,9 @@
   const topRotate = $derived(topX / 18);
 
   const activeFeedKey = $derived(
-    `${$settings.bestPickMode ? 1 : 0}|${$filters.countries.join(',')}|${$filters.popularity}|${
-      $filters.includeExtraRare ? 1 : 0
-    }|${$filters.gender}`
+    `${$settings.bestPickMode ? 1 : 0}|${$filters.countries.join(',')}|${$filters.popularity.join(
+      ','
+    )}|${$filters.gender}`
   );
   let lastFeedKey = $state<string | null>(null);
 
@@ -72,8 +72,7 @@
         const missing = targetDeckSize - deck.length;
         const batch = await api.feedBatch({
           countries: $filters.countries.join(','),
-          pop: $filters.popularity,
-          include_extra_rare: $filters.includeExtraRare,
+          pop: $filters.popularity.join(','),
           gender: $filters.gender,
           limit: Math.min(10, missing),
         });

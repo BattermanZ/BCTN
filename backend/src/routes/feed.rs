@@ -18,10 +18,11 @@ pub(crate) struct FeedQuery {
     /// Comma-separated list of evidence countries (subset of US,FR,CL).
     countries: Option<String>,
 
-    /// rare|common|top
+    /// Comma-separated list of tiers: extra_rare,rare,common,top
     pop: Option<String>,
 
-    /// Include extra-rare (<75 ppm) names.
+    /// Deprecated: included for backwards compatibility with older clients.
+    /// If true and `pop` is missing, extra_rare will be included in the default set.
     include_extra_rare: Option<bool>,
 
     /// unisex|mostly_male|mostly_female|male|female|any
@@ -33,10 +34,11 @@ pub(crate) struct FeedBatchQuery {
     /// Comma-separated list of evidence countries (subset of US,FR,CL).
     countries: Option<String>,
 
-    /// rare|common|top
+    /// Comma-separated list of tiers: extra_rare,rare,common,top
     pop: Option<String>,
 
-    /// Include extra-rare (<75 ppm) names.
+    /// Deprecated: included for backwards compatibility with older clients.
+    /// If true and `pop` is missing, extra_rare will be included in the default set.
     include_extra_rare: Option<bool>,
 
     /// unisex|mostly_male|mostly_female|male|female|any
@@ -115,13 +117,6 @@ enum GenderFilter {
     Female,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum PopFilter {
-    Rare,
-    Common,
-    Top,
-}
-
 fn parse_countries(s: Option<String>) -> Result<Vec<&'static str>> {
     let raw = s.unwrap_or_else(|| "US,FR,CL".to_string());
     let mut out = Vec::new();
@@ -139,13 +134,38 @@ fn parse_countries(s: Option<String>) -> Result<Vec<&'static str>> {
     Ok(out)
 }
 
-fn parse_pop(s: Option<String>) -> Result<PopFilter> {
-    match s.as_deref().unwrap_or("common") {
-        "rare" => Ok(PopFilter::Rare),
-        "common" => Ok(PopFilter::Common),
-        "top" => Ok(PopFilter::Top),
-        other => bail!("invalid pop {other:?}; expected rare|common|top"),
+fn parse_pop_set(s: Option<String>, include_extra_rare: Option<bool>) -> Result<HashSet<Tier>> {
+    let mut out = HashSet::<Tier>::new();
+
+    let missing = s.is_none();
+    let raw = s.unwrap_or_else(|| "rare,common,top".to_string());
+    for part in raw.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+        match part {
+            "extra_rare" => {
+                out.insert(Tier::ExtraRare);
+            }
+            "rare" => {
+                out.insert(Tier::Rare);
+            }
+            "common" => {
+                out.insert(Tier::Common);
+            }
+            "top" => {
+                out.insert(Tier::Top);
+            }
+            other => bail!("invalid pop {other:?}; expected extra_rare,rare,common,top"),
+        }
     }
+
+    // Back-compat: if a client sends include_extra_rare=true without explicit pop selection.
+    if missing && include_extra_rare.unwrap_or(false) {
+        out.insert(Tier::ExtraRare);
+    }
+
+    if out.is_empty() {
+        bail!("pop must not be empty");
+    }
+    Ok(out)
 }
 
 fn parse_gender(s: Option<String>) -> Result<GenderFilter> {
@@ -180,7 +200,7 @@ fn tier_from_ppm(ppm: f64, top100_any: bool) -> Tier {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Tier {
     ExtraRare,
     Rare,
@@ -235,12 +255,8 @@ fn matches_gender(filter: GenderFilter, label: &str) -> bool {
     }
 }
 
-fn matches_pop(filter: PopFilter, ppm: f64, top100_any: bool) -> bool {
-    match filter {
-        PopFilter::Top => top100_any,
-        PopFilter::Rare => !top100_any && (75.0..300.0).contains(&ppm),
-        PopFilter::Common => !top100_any && ppm >= 300.0,
-    }
+fn matches_pop(selected: &HashSet<Tier>, ppm: f64, top100_any: bool) -> bool {
+    selected.contains(&tier_from_ppm(ppm, top100_any))
 }
 
 fn score_best_picks(
@@ -315,9 +331,8 @@ pub(crate) async fn batch(
 async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<FeedCardResponse> {
     let (user_id, _) = super::auth::require_session_user(state, jar).await?;
     let selected_countries = parse_countries(q.countries)?;
-    let pop = parse_pop(q.pop)?;
+    let pop = parse_pop_set(q.pop, q.include_extra_rare)?;
     let gender = parse_gender(q.gender)?;
-    let include_extra_rare = q.include_extra_rare.unwrap_or(false);
 
     let best_pick_mode: i64 =
         sqlx::query_scalar("SELECT best_pick_mode FROM user_settings WHERE user_id = ?1")
@@ -348,18 +363,14 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
             let mut has_any = false;
             let mut passes_any_pop = false;
             let mut passes_any_gender = false;
-            let mut passes_any_non_extra = false;
 
             for &country in &selected_countries {
                 let (p, top, stats) = by_country(country);
                 if stats.total > 0 {
                     has_any = true;
                 }
-                if matches_pop(pop, p, top) {
+                if matches_pop(&pop, p, top) {
                     passes_any_pop = true;
-                }
-                if p >= 75.0 {
-                    passes_any_non_extra = true;
                 }
                 let gl = gender_label(stats.male, stats.female);
                 if matches_gender(gender, &gl) {
@@ -368,9 +379,6 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
             }
 
             if !has_any {
-                return false;
-            }
-            if !include_extra_rare && !passes_any_non_extra {
                 return false;
             }
             if !passes_any_pop {
@@ -414,9 +422,8 @@ async fn batch_impl(
 ) -> Result<Vec<FeedCardResponse>> {
     let (user_id, _) = super::auth::require_session_user(state, jar).await?;
     let selected_countries = parse_countries(q.countries)?;
-    let pop = parse_pop(q.pop)?;
+    let pop = parse_pop_set(q.pop, q.include_extra_rare)?;
     let gender = parse_gender(q.gender)?;
-    let include_extra_rare = q.include_extra_rare.unwrap_or(false);
 
     let best_pick_mode: i64 =
         sqlx::query_scalar("SELECT best_pick_mode FROM user_settings WHERE user_id = ?1")
@@ -448,18 +455,14 @@ async fn batch_impl(
             let mut has_any = false;
             let mut passes_any_pop = false;
             let mut passes_any_gender = false;
-            let mut passes_any_non_extra = false;
 
             for &country in &selected_countries {
                 let (p, top, stats) = by_country(country);
                 if stats.total > 0 {
                     has_any = true;
                 }
-                if matches_pop(pop, p, top) {
+                if matches_pop(&pop, p, top) {
                     passes_any_pop = true;
-                }
-                if p >= 75.0 {
-                    passes_any_non_extra = true;
                 }
                 let gl = gender_label(stats.male, stats.female);
                 if matches_gender(gender, &gl) {
@@ -468,9 +471,6 @@ async fn batch_impl(
             }
 
             if !has_any {
-                return false;
-            }
-            if !include_extra_rare && !passes_any_non_extra {
                 return false;
             }
             if !passes_any_pop {

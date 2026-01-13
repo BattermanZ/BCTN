@@ -1,10 +1,9 @@
 import { writable } from 'svelte/store';
-import type { CountryCode, SwipeAction, User } from '$lib/types';
+import type { CountryCode, PopularityTier, SwipeAction, User } from '$lib/types';
 
 export type AppFilters = {
   countries: CountryCode[];
-  popularity: 'rare' | 'common' | 'top';
-  includeExtraRare: boolean;
+  popularity: PopularityTier[];
   gender: 'any' | 'unisex' | 'mostly_male' | 'mostly_female' | 'male' | 'female';
 };
 
@@ -24,8 +23,7 @@ export const partnerUser = writable<User | null>(null);
 
 export const filters = writable<AppFilters>({
   countries: ['US', 'FR', 'CL'],
-  popularity: 'common',
-  includeExtraRare: false,
+  popularity: ['rare', 'common', 'top'],
   gender: 'any',
 });
 

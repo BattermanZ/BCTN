@@ -39,8 +39,7 @@ export type PatchSettingsRequest = Partial<SettingsResponse>;
 
 export type FeedQuery = {
   countries: string;
-  pop: 'rare' | 'common' | 'top';
-  include_extra_rare: boolean;
+  pop: string;
   gender: string;
 };
 
@@ -99,7 +98,6 @@ export const api = {
     const params = new URLSearchParams({
       countries: q.countries,
       pop: q.pop,
-      include_extra_rare: q.include_extra_rare ? 'true' : 'false',
       gender: q.gender,
     });
     return await apiFetch<Card>(`/api/feed/next?${params.toString()}`);
@@ -109,7 +107,6 @@ export const api = {
     const params = new URLSearchParams({
       countries: q.countries,
       pop: q.pop,
-      include_extra_rare: q.include_extra_rare ? 'true' : 'false',
       gender: q.gender,
       limit: String(q.limit),
     });

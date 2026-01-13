@@ -7,6 +7,11 @@
   import { goto } from '$app/navigation';
 
   const countries: CountryCode[] = ['US', 'FR', 'CL'];
+  const countryLabel: Record<CountryCode, string> = {
+    US: 'United States',
+    FR: 'France',
+    CL: 'Chile',
+  };
 
   function toggleCountry(c: CountryCode) {
     filters.update((f) => {
@@ -37,6 +42,22 @@
       }
     }
   }
+
+  const popularityLevels = ['extra_rare', 'rare', 'common', 'top'] as const;
+  const popularityLabel: Record<(typeof popularityLevels)[number], string> = {
+    extra_rare: 'Extra rare',
+    rare: 'Rare',
+    common: 'Common',
+    top: 'Top',
+  };
+
+  function togglePopularity(p: (typeof popularityLevels)[number]) {
+    filters.update((f) => {
+      const has = f.popularity.includes(p);
+      const next = has ? f.popularity.filter((x) => x !== p) : [...f.popularity, p];
+      return { ...f, popularity: next.length ? next : f.popularity };
+    });
+  }
 </script>
 
 <header class="flex items-end justify-between">
@@ -66,7 +87,7 @@
             }`}
             onclick={() => toggleCountry(c)}
           >
-            {c}
+            {countryLabel[c]}
           </button>
         {/each}
       </div>
@@ -77,34 +98,24 @@
 
     <div class="mt-4">
       <div class="text-xs font-semibold text-zinc-500">Popularity</div>
-      <div class="mt-2 grid grid-cols-3 gap-2">
-        {#each ['rare', 'common', 'top'] as p (p)}
+      <div class="mt-2 grid grid-cols-2 gap-2">
+        {#each popularityLevels as p (p)}
           <button
             type="button"
             class={`rounded-2xl border px-3 py-2 text-sm font-semibold ${
-              $filters.popularity === p
+              $filters.popularity.includes(p)
                 ? 'border-zinc-900 bg-zinc-900 text-white'
                 : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
             }`}
-            onclick={() => filters.update((f) => ({ ...f, popularity: p as typeof f.popularity }))}
+            onclick={() => togglePopularity(p)}
           >
-            {p}
+            {popularityLabel[p]}
           </button>
         {/each}
       </div>
-      <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700">
-        <input
-          type="checkbox"
-          class="h-4 w-4 accent-indigo-600"
-          checked={$filters.includeExtraRare}
-          onchange={(e) =>
-            filters.update((f) => ({
-              ...f,
-              includeExtraRare: (e.currentTarget as HTMLInputElement).checked,
-            }))}
-        />
-        Include extra rare
-      </label>
+      <div class="mt-2 text-xs text-zinc-500">
+        Select one or more tiers. Default is Rare + Common + Top (Extra rare off).
+      </div>
     </div>
 
     <div class="mt-4">
