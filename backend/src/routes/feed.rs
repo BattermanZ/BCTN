@@ -304,8 +304,8 @@ pub(crate) async fn next(
     jar: CookieJar,
     Query(q): Query<FeedQuery>,
 ) -> impl IntoResponse {
-    match next_impl(&state, &jar, q).await {
-        Ok(card) => Json(card).into_response(),
+    match next_impl(&state, jar, q).await {
+        Ok((jar, card)) => (jar, Json(card)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "feed_next_failed");
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
@@ -319,8 +319,8 @@ pub(crate) async fn batch(
     jar: CookieJar,
     Query(q): Query<FeedBatchQuery>,
 ) -> impl IntoResponse {
-    match batch_impl(&state, &jar, q).await {
-        Ok(cards) => Json(cards).into_response(),
+    match batch_impl(&state, jar, q).await {
+        Ok((jar, cards)) => (jar, Json(cards)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "feed_batch_failed");
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
@@ -328,8 +328,12 @@ pub(crate) async fn batch(
     }
 }
 
-async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<FeedCardResponse> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+async fn next_impl(
+    state: &AppState,
+    jar: CookieJar,
+    q: FeedQuery,
+) -> Result<(CookieJar, FeedCardResponse)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let selected_countries = parse_countries(q.countries)?;
     let pop = parse_pop_set(q.pop, q.include_extra_rare)?;
     let gender = parse_gender(q.gender)?;
@@ -412,15 +416,16 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
         candidates.choose(&mut rng).cloned().expect("non-empty")
     };
 
-    build_response(state, &chosen, &selected_countries, best_pick_mode != 0).await
+    let resp = build_response(state, &chosen, &selected_countries, best_pick_mode != 0).await?;
+    Ok((jar, resp))
 }
 
 async fn batch_impl(
     state: &AppState,
-    jar: &CookieJar,
+    jar: CookieJar,
     q: FeedBatchQuery,
-) -> Result<Vec<FeedCardResponse>> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+) -> Result<(CookieJar, Vec<FeedCardResponse>)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let selected_countries = parse_countries(q.countries)?;
     let pop = parse_pop_set(q.pop, q.include_extra_rare)?;
     let gender = parse_gender(q.gender)?;
@@ -514,7 +519,7 @@ async fn batch_impl(
     for c in chosen {
         out.push(build_response(state, &c, &selected_countries, best_pick_mode != 0).await?);
     }
-    Ok(out)
+    Ok((jar, out))
 }
 
 async fn build_response(

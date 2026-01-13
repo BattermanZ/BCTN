@@ -59,12 +59,12 @@ pub(crate) struct UpdateUserRequest {
 
 #[debug_handler]
 pub(crate) async fn list_users(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
-    if require_admin(&state, &jar).await.is_err() {
+    let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
         return StatusCode::FORBIDDEN.into_response();
-    }
+    };
 
     match list_users_impl(&state).await {
-        Ok(users) => Json(users).into_response(),
+        Ok(users) => (jar, Json(users)).into_response(),
         Err(err) => {
             tracing::error!(error=%err, "list_users_failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -101,12 +101,12 @@ pub(crate) async fn create_user(
     jar: CookieJar,
     Json(req): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
-    if require_admin(&state, &jar).await.is_err() {
+    let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
         return StatusCode::FORBIDDEN.into_response();
-    }
+    };
 
     match create_user_impl(&state, req).await {
-        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
+        Ok(user) => (jar, (StatusCode::CREATED, Json(user))).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "create_user_failed");
             StatusCode::BAD_REQUEST.into_response()
@@ -173,12 +173,12 @@ pub(crate) async fn update_user(
     Path(id): Path<i64>,
     Json(req): Json<UpdateUserRequest>,
 ) -> impl IntoResponse {
-    if require_admin(&state, &jar).await.is_err() {
+    let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
         return StatusCode::FORBIDDEN.into_response();
-    }
+    };
 
     match update_user_impl(&state, id, req).await {
-        Ok(user) => Json(user).into_response(),
+        Ok(user) => (jar, Json(user)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "update_user_failed");
             StatusCode::BAD_REQUEST.into_response()
@@ -208,6 +208,17 @@ async fn update_user_impl(state: &AppState, id: i64, req: UpdateUserRequest) -> 
         username = u.trim().to_string();
     }
     if let Some(a) = req.is_admin {
+        if !a && is_admin != 0 {
+            let active_admins: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM app_user WHERE deleted_at IS NULL AND is_admin != 0",
+            )
+            .fetch_one(&state.db)
+            .await
+            .context("count admins")?;
+            if active_admins <= 1 {
+                bail!("cannot remove last admin");
+            }
+        }
         is_admin = if a { 1 } else { 0 };
     }
     if req.undelete.unwrap_or(false) {
@@ -276,12 +287,12 @@ pub(crate) async fn delete_user(
     jar: CookieJar,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    if require_admin(&state, &jar).await.is_err() {
+    let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
         return StatusCode::FORBIDDEN.into_response();
-    }
+    };
 
     match delete_user_impl(&state, id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => (jar, StatusCode::NO_CONTENT).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "delete_user_failed");
             StatusCode::BAD_REQUEST.into_response()
@@ -298,16 +309,55 @@ async fn delete_user_impl(state: &AppState, id: i64) -> Result<()> {
         bail!("cannot delete last active user");
     }
 
-    let mut tx = state.db.begin().await?;
-    sqlx::query("DELETE FROM name_match")
-        .execute(&mut *tx)
+    let deleting_is_admin: i64 =
+        sqlx::query_scalar("SELECT is_admin FROM app_user WHERE id = ?1 AND deleted_at IS NULL")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .context("load deleting user is_admin")?;
+    if deleting_is_admin != 0 {
+        let active_admins: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM app_user WHERE deleted_at IS NULL AND is_admin != 0",
+        )
+        .fetch_one(&state.db)
         .await
-        .ok();
+        .context("count admins")?;
+        if active_admins <= 1 {
+            bail!("cannot delete last admin");
+        }
+    }
+
+    let mut tx = state.db.begin().await?;
     sqlx::query("DELETE FROM app_user WHERE id = ?1")
         .bind(id)
         .execute(&mut *tx)
         .await
         .context("delete user")?;
+
+    rebuild_matches(&mut tx).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+async fn rebuild_matches(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
+    sqlx::query("DELETE FROM name_match")
+        .execute(&mut **tx)
+        .await
+        .context("clear matches")?;
+
+    sqlx::query(
+        r#"
+        INSERT OR REPLACE INTO name_match (card_key, created_at)
+        SELECT card_key, MAX(created_at) AS created_at
+        FROM swipe
+        WHERE action IN ('like', 'superlike')
+        GROUP BY card_key
+        HAVING COUNT(DISTINCT user_id) >= 2
+        "#,
+    )
+    .execute(&mut **tx)
+    .await
+    .context("rebuild matches")?;
+
     Ok(())
 }

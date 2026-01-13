@@ -10,10 +10,9 @@ pub(crate) mod views;
 #[cfg(test)]
 mod tests;
 
+use crate::state::AppState;
 use axum::Router;
 use axum::routing::{get, post};
-
-use crate::state::AppState;
 
 pub(crate) fn router(state: AppState) -> Router {
     Router::new()

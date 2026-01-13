@@ -52,14 +52,14 @@ async fn card_ref(state: &AppState, card_key: &str) -> Result<CardRef> {
 
 #[debug_handler]
 pub(crate) async fn matches(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
-    match matches_impl(&state, &jar).await {
-        Ok(v) => Json(v).into_response(),
+    match matches_impl(&state, jar).await {
+        Ok((jar, v)) => (jar, Json(v)).into_response(),
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
-async fn matches_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRef>> {
-    super::auth::require_session_user_ready(state, jar).await?;
+async fn matches_impl(state: &AppState, jar: CookieJar) -> Result<(CookieJar, Vec<CardRef>)> {
+    let (jar, _user_id, _is_admin) = super::auth::require_session_user_ready(state, jar).await?;
     let rows: Vec<String> =
         sqlx::query_scalar("SELECT card_key FROM name_match ORDER BY created_at DESC")
             .fetch_all(&state.db)
@@ -69,19 +69,19 @@ async fn matches_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRef>>
     for k in rows {
         out.push(card_ref(state, &k).await?);
     }
-    Ok(out)
+    Ok((jar, out))
 }
 
 #[debug_handler]
 pub(crate) async fn likes(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
-    match likes_impl(&state, &jar).await {
-        Ok(v) => Json(v).into_response(),
+    match likes_impl(&state, jar).await {
+        Ok((jar, v)) => (jar, Json(v)).into_response(),
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
-async fn likes_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRef>> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+async fn likes_impl(state: &AppState, jar: CookieJar) -> Result<(CookieJar, Vec<CardRef>)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT card_key FROM swipe WHERE user_id = ?1 AND action = 'like' GROUP BY card_key ORDER BY MAX(created_at) DESC",
     )
@@ -93,19 +93,19 @@ async fn likes_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRef>> {
     for k in rows {
         out.push(card_ref(state, &k).await?);
     }
-    Ok(out)
+    Ok((jar, out))
 }
 
 #[debug_handler]
 pub(crate) async fn superlikes(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
-    match superlikes_impl(&state, &jar).await {
-        Ok(v) => Json(v).into_response(),
+    match superlikes_impl(&state, jar).await {
+        Ok((jar, v)) => (jar, Json(v)).into_response(),
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
-async fn superlikes_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRef>> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+async fn superlikes_impl(state: &AppState, jar: CookieJar) -> Result<(CookieJar, Vec<CardRef>)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT card_key FROM swipe WHERE user_id = ?1 AND action = 'superlike' GROUP BY card_key ORDER BY MAX(created_at) DESC",
     )
@@ -117,5 +117,5 @@ async fn superlikes_impl(state: &AppState, jar: &CookieJar) -> Result<Vec<CardRe
     for k in rows {
         out.push(card_ref(state, &k).await?);
     }
-    Ok(out)
+    Ok((jar, out))
 }

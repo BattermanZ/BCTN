@@ -71,8 +71,8 @@ pub(crate) async fn create(
     jar: CookieJar,
     Json(req): Json<CreateSwipeRequest>,
 ) -> impl IntoResponse {
-    match create_impl(&state, &jar, req).await {
-        Ok(resp) => Json(resp).into_response(),
+    match create_impl(&state, jar, req).await {
+        Ok((jar, resp)) => (jar, Json(resp)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "create_swipe_failed");
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
@@ -82,10 +82,10 @@ pub(crate) async fn create(
 
 async fn create_impl(
     state: &AppState,
-    jar: &CookieJar,
+    jar: CookieJar,
     req: CreateSwipeRequest,
-) -> Result<CreateSwipeResponse> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+) -> Result<(CookieJar, CreateSwipeResponse)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     validate_card_kind(&req.card_kind)?;
     validate_action(&req.action)?;
 
@@ -106,19 +106,25 @@ async fn create_impl(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("UNIQUE") {
-                return Ok(CreateSwipeResponse {
-                    status: "already_swiped".to_string(),
-                    match_created: false,
-                });
+                return Ok((
+                    jar,
+                    CreateSwipeResponse {
+                        status: "already_swiped".to_string(),
+                        match_created: false,
+                    },
+                ));
             }
             return Err(e).context("insert swipe");
         }
     };
     if !inserted {
-        return Ok(CreateSwipeResponse {
-            status: "already_swiped".to_string(),
-            match_created: false,
-        });
+        return Ok((
+            jar,
+            CreateSwipeResponse {
+                status: "already_swiped".to_string(),
+                match_created: false,
+            },
+        ));
     }
 
     let mut match_created = false;
@@ -147,16 +153,19 @@ async fn create_impl(
         }
     }
 
-    Ok(CreateSwipeResponse {
-        status: "ok".to_string(),
-        match_created,
-    })
+    Ok((
+        jar,
+        CreateSwipeResponse {
+            status: "ok".to_string(),
+            match_created,
+        },
+    ))
 }
 
 #[debug_handler]
 pub(crate) async fn undo(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
-    match undo_impl(&state, &jar).await {
-        Ok(resp) => Json(resp).into_response(),
+    match undo_impl(&state, jar).await {
+        Ok((jar, resp)) => (jar, Json(resp)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "undo_swipe_failed");
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
@@ -164,8 +173,8 @@ pub(crate) async fn undo(State(state): State<AppState>, jar: CookieJar) -> impl 
     }
 }
 
-async fn undo_impl(state: &AppState, jar: &CookieJar) -> Result<UndoSwipeResponse> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+async fn undo_impl(state: &AppState, jar: CookieJar) -> Result<(CookieJar, UndoSwipeResponse)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
 
     let row = sqlx::query(
         "SELECT id, card_key, action FROM swipe WHERE user_id=?1 ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -176,11 +185,14 @@ async fn undo_impl(state: &AppState, jar: &CookieJar) -> Result<UndoSwipeRespons
     .context("load last swipe")?;
 
     let Some(row) = row else {
-        return Ok(UndoSwipeResponse {
-            status: "nothing_to_undo".to_string(),
-            undone: None,
-            match_removed: false,
-        });
+        return Ok((
+            jar,
+            UndoSwipeResponse {
+                status: "nothing_to_undo".to_string(),
+                undone: None,
+                match_removed: false,
+            },
+        ));
     };
 
     let swipe_id: i64 = row.try_get("id")?;
@@ -205,9 +217,12 @@ async fn undo_impl(state: &AppState, jar: &CookieJar) -> Result<UndoSwipeRespons
         }
     }
 
-    Ok(UndoSwipeResponse {
-        status: "ok".to_string(),
-        undone: Some(UndoneSwipe { card_key, action }),
-        match_removed,
-    })
+    Ok((
+        jar,
+        UndoSwipeResponse {
+            status: "ok".to_string(),
+            undone: Some(UndoneSwipe { card_key, action }),
+            match_removed,
+        },
+    ))
 }

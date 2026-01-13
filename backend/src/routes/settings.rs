@@ -28,14 +28,17 @@ pub(crate) async fn get_settings(
     State(state): State<AppState>,
     jar: CookieJar,
 ) -> impl IntoResponse {
-    match get_settings_impl(&state, &jar).await {
-        Ok(settings) => Json(settings).into_response(),
+    match get_settings_impl(&state, jar).await {
+        Ok((jar, settings)) => (jar, Json(settings)).into_response(),
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
-async fn get_settings_impl(state: &AppState, jar: &CookieJar) -> Result<SettingsResponse> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+async fn get_settings_impl(
+    state: &AppState,
+    jar: CookieJar,
+) -> Result<(CookieJar, SettingsResponse)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let row = sqlx::query(
         "SELECT show_last_name, last_name, best_pick_mode FROM user_settings WHERE user_id = ?1",
     )
@@ -43,11 +46,14 @@ async fn get_settings_impl(state: &AppState, jar: &CookieJar) -> Result<Settings
     .fetch_one(&state.db)
     .await
     .context("load settings")?;
-    Ok(SettingsResponse {
-        show_last_name: row.try_get::<i64, _>("show_last_name")? != 0,
-        last_name: row.try_get("last_name")?,
-        best_pick_mode: row.try_get::<i64, _>("best_pick_mode")? != 0,
-    })
+    Ok((
+        jar,
+        SettingsResponse {
+            show_last_name: row.try_get::<i64, _>("show_last_name")? != 0,
+            last_name: row.try_get("last_name")?,
+            best_pick_mode: row.try_get::<i64, _>("best_pick_mode")? != 0,
+        },
+    ))
 }
 
 #[debug_handler]
@@ -56,8 +62,8 @@ pub(crate) async fn patch_settings(
     jar: CookieJar,
     Json(req): Json<PatchSettingsRequest>,
 ) -> impl IntoResponse {
-    match patch_settings_impl(&state, &jar, req).await {
-        Ok(settings) => Json(settings).into_response(),
+    match patch_settings_impl(&state, jar, req).await {
+        Ok((jar, settings)) => (jar, Json(settings)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "patch_settings_failed");
             StatusCode::BAD_REQUEST.into_response()
@@ -67,10 +73,10 @@ pub(crate) async fn patch_settings(
 
 async fn patch_settings_impl(
     state: &AppState,
-    jar: &CookieJar,
+    jar: CookieJar,
     req: PatchSettingsRequest,
-) -> Result<SettingsResponse> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+) -> Result<(CookieJar, SettingsResponse)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
 
     if let Some(ref ln) = req.last_name
         && (ln.trim().is_empty() || ln.len() > 64)

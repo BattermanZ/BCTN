@@ -654,8 +654,8 @@ pub(crate) async fn get(
     Query(q): Query<CardQuery>,
     Path(card_key): Path<String>,
 ) -> impl IntoResponse {
-    match get_impl(&state, &jar, &card_key, q).await {
-        Ok(v) => Json(v).into_response(),
+    match get_impl(&state, jar, &card_key, q).await {
+        Ok((jar, v)) => (jar, Json(v)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "card_get_failed");
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
@@ -665,11 +665,11 @@ pub(crate) async fn get(
 
 async fn get_impl(
     state: &AppState,
-    jar: &CookieJar,
+    jar: CookieJar,
     card_key: &str,
     q: CardQuery,
-) -> Result<CardDetailsResponse> {
-    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+) -> Result<(CookieJar, CardDetailsResponse)> {
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let kind = detect_kind(state, card_key).await?;
     let selected_countries = parse_countries(q.countries)?;
 
@@ -737,17 +737,20 @@ async fn get_impl(
     let last5_year_ranks = last5_year_ranks_materialized(state, kind, card_key).await?;
     let last5_years = country_last5_years(state).await?;
 
-    Ok(CardDetailsResponse {
-        card_key: card_key.to_string(),
-        card_kind: kind.as_str().to_string(),
-        display_name,
-        spellings_preview,
-        score,
-        per_country,
-        sex_split,
-        all_spellings,
-        within_concept_variants,
-        last5_years,
-        last5_year_ranks,
-    })
+    Ok((
+        jar,
+        CardDetailsResponse {
+            card_key: card_key.to_string(),
+            card_kind: kind.as_str().to_string(),
+            display_name,
+            spellings_preview,
+            score,
+            per_country,
+            sex_split,
+            all_spellings,
+            within_concept_variants,
+            last5_years,
+            last5_year_ranks,
+        },
+    ))
 }
