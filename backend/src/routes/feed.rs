@@ -329,7 +329,7 @@ pub(crate) async fn batch(
 }
 
 async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<FeedCardResponse> {
-    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let selected_countries = parse_countries(q.countries)?;
     let pop = parse_pop_set(q.pop, q.include_extra_rare)?;
     let gender = parse_gender(q.gender)?;
@@ -420,7 +420,7 @@ async fn batch_impl(
     jar: &CookieJar,
     q: FeedBatchQuery,
 ) -> Result<Vec<FeedCardResponse>> {
-    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let selected_countries = parse_countries(q.countries)?;
     let pop = parse_pop_set(q.pop, q.include_extra_rare)?;
     let gender = parse_gender(q.gender)?;

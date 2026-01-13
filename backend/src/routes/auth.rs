@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 use crate::state::AppState;
 
 const SESSION_COOKIE: &str = "bctn_session";
-const SESSION_DAYS: i64 = 30;
+const SESSION_DAYS: i64 = 90;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoginRequest {
@@ -27,6 +27,12 @@ pub(crate) struct MeResponse {
     id: i64,
     username: String,
     is_admin: bool,
+    must_change_password: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChangePasswordRequest {
+    new_password: String,
 }
 
 fn now_ts() -> i64 {
@@ -46,14 +52,17 @@ fn token_hash(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-pub(crate) async fn require_session_user(state: &AppState, jar: &CookieJar) -> Result<(i64, bool)> {
+pub(crate) async fn require_session_user(
+    state: &AppState,
+    jar: &CookieJar,
+) -> Result<(i64, bool, bool)> {
     let Some(token) = jar.get(SESSION_COOKIE).map(|c| c.value().to_string()) else {
         anyhow::bail!("missing session");
     };
     let session_token_hash = token_hash(&token);
     let row = sqlx::query(
         r#"
-        SELECT u.id AS user_id, u.is_admin AS is_admin
+        SELECT u.id AS user_id, u.is_admin AS is_admin, u.must_change_password AS must_change_password
         FROM app_session s
         JOIN app_user u ON u.id = s.user_id
         WHERE s.session_token_hash = ?1
@@ -73,6 +82,7 @@ pub(crate) async fn require_session_user(state: &AppState, jar: &CookieJar) -> R
 
     let user_id: i64 = row.try_get("user_id")?;
     let is_admin_i64: i64 = row.try_get("is_admin")?;
+    let must_change_password_i64: i64 = row.try_get("must_change_password")?;
 
     sqlx::query("UPDATE app_session SET last_seen_at = ?1 WHERE session_token_hash = ?2")
         .bind(now_ts())
@@ -81,7 +91,18 @@ pub(crate) async fn require_session_user(state: &AppState, jar: &CookieJar) -> R
         .await
         .ok();
 
-    Ok((user_id, is_admin_i64 != 0))
+    Ok((user_id, is_admin_i64 != 0, must_change_password_i64 != 0))
+}
+
+pub(crate) async fn require_session_user_ready(
+    state: &AppState,
+    jar: &CookieJar,
+) -> Result<(i64, bool)> {
+    let (user_id, is_admin, must_change_password) = require_session_user(state, jar).await?;
+    if must_change_password {
+        anyhow::bail!("password change required");
+    }
+    Ok((user_id, is_admin))
 }
 
 #[debug_handler]
@@ -106,7 +127,7 @@ async fn login_impl(
 ) -> Result<impl IntoResponse> {
     let row = sqlx::query(
         r#"
-        SELECT id, username, password_hash, is_admin
+        SELECT id, username, password_hash, is_admin, must_change_password
         FROM app_user
         WHERE username = ?1 AND deleted_at IS NULL
         "#,
@@ -120,6 +141,7 @@ async fn login_impl(
     let username: String = row.try_get("username")?;
     let password_hash: String = row.try_get("password_hash")?;
     let is_admin_i64: i64 = row.try_get("is_admin")?;
+    let must_change_password_i64: i64 = row.try_get("must_change_password")?;
 
     let parsed_hash = PasswordHash::new(&password_hash)
         .map_err(|e| anyhow::anyhow!("parse password hash: {e}"))?;
@@ -148,6 +170,11 @@ async fn login_impl(
         .secure(state.cookie_secure)
         .same_site(SameSite::Lax)
         .path("/")
+        .max_age(time::Duration::days(SESSION_DAYS))
+        .expires(
+            OffsetDateTime::from_unix_timestamp(expires)
+                .unwrap_or_else(|_| OffsetDateTime::now_utc()),
+        )
         .build();
 
     let jar = jar.add(cookie);
@@ -155,6 +182,7 @@ async fn login_impl(
         id: user_id,
         username,
         is_admin: is_admin_i64 != 0,
+        must_change_password: must_change_password_i64 != 0,
     };
     Ok((jar, Json(me)))
 }
@@ -184,10 +212,8 @@ pub(crate) async fn me(State(state): State<AppState>, jar: CookieJar) -> impl In
 }
 
 async fn me_impl(state: &AppState, jar: &CookieJar) -> Result<MeResponse> {
-    let (user_id, _) = require_session_user(state, jar).await?;
-    let row = sqlx::query(
-        "SELECT id, username, is_admin FROM app_user WHERE id = ?1 AND deleted_at IS NULL",
-    )
+    let (user_id, _, _) = require_session_user(state, jar).await?;
+    let row = sqlx::query("SELECT id, username, is_admin, must_change_password FROM app_user WHERE id = ?1 AND deleted_at IS NULL")
     .bind(user_id)
     .fetch_one(&state.db)
     .await?;
@@ -195,13 +221,70 @@ async fn me_impl(state: &AppState, jar: &CookieJar) -> Result<MeResponse> {
         id: row.try_get("id")?,
         username: row.try_get("username")?,
         is_admin: row.try_get::<i64, _>("is_admin")? != 0,
+        must_change_password: row.try_get::<i64, _>("must_change_password")? != 0,
     })
 }
 
 pub(crate) async fn require_admin(state: &AppState, jar: &CookieJar) -> Result<i64> {
-    let (user_id, is_admin) = require_session_user(state, jar).await?;
+    let (user_id, is_admin) = require_session_user_ready(state, jar).await?;
     if !is_admin {
         anyhow::bail!("not admin");
     }
     Ok(user_id)
+}
+
+fn hash_password(password: &str) -> Result<String> {
+    use argon2::PasswordHasher;
+    use argon2::password_hash::SaltString;
+    let salt = {
+        let mut bytes = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        SaltString::encode_b64(&bytes).map_err(|e| anyhow::anyhow!("salt: {e}"))?
+    };
+    let hash = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| anyhow::anyhow!("hash password: {e}"))?
+        .to_string();
+    Ok(hash)
+}
+
+#[debug_handler]
+pub(crate) async fn change_password(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Json(req): Json<ChangePasswordRequest>,
+) -> impl IntoResponse {
+    match change_password_impl(&state, &jar, req).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => {
+            tracing::warn!(error=%err, "change_password_failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+async fn change_password_impl(
+    state: &AppState,
+    jar: &CookieJar,
+    req: ChangePasswordRequest,
+) -> Result<()> {
+    if req.new_password.len() < 8 {
+        anyhow::bail!("password too short");
+    }
+
+    let (user_id, _, _) = require_session_user(state, jar).await?;
+    let now = now_ts();
+    let password_hash = hash_password(&req.new_password)?;
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query("UPDATE app_user SET password_hash=?1, must_change_password=0, updated_at=?2 WHERE id=?3 AND deleted_at IS NULL")
+        .bind(password_hash)
+        .bind(now)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .context("update password")?;
+
+    tx.commit().await?;
+    Ok(())
 }

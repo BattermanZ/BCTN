@@ -20,6 +20,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/change-password", post(auth::change_password))
         .route("/api/me", get(auth::me))
         .route("/api/users", get(users::list))
         .route("/api/feed/next", get(feed::next))

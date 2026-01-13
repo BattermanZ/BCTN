@@ -47,7 +47,7 @@ pub(crate) async fn bootstrap_admin(
 
     let mut tx = db.begin().await?;
     let user_id = sqlx::query(
-        "INSERT INTO app_user (username, password_hash, is_admin, created_at, updated_at) VALUES (?1, ?2, 1, ?3, ?3)",
+        "INSERT INTO app_user (username, password_hash, is_admin, must_change_password, created_at, updated_at) VALUES (?1, ?2, 1, 0, ?3, ?3)",
     )
     .bind(username.trim())
     .bind(password_hash)

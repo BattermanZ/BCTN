@@ -24,7 +24,7 @@ pub(crate) async fn list(State(state): State<AppState>, jar: CookieJar) -> impl 
 }
 
 async fn list_impl(state: &AppState, jar: &CookieJar) -> anyhow::Result<Vec<UserSummary>> {
-    super::auth::require_session_user(state, jar).await?;
+    super::auth::require_session_user_ready(state, jar).await?;
     let rows = sqlx::query(
         "SELECT id, username, is_admin FROM app_user WHERE deleted_at IS NULL ORDER BY id",
     )

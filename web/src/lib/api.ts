@@ -27,7 +27,12 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
-export type MeResponse = { id: number; username: string; is_admin: boolean };
+export type MeResponse = {
+  id: number;
+  username: string;
+  is_admin: boolean;
+  must_change_password: boolean;
+};
 export type UserSummary = { id: number; username: string; is_admin: boolean };
 
 export type SettingsResponse = {
@@ -60,15 +65,35 @@ export type SwipeUndoResponse = {
 
 export type CardRef = { card_key: string; card_kind: 'group' | 'concept'; display_name: string };
 
+export type AdminUserRow = {
+  id: number;
+  username: string;
+  is_admin: boolean;
+  must_change_password: boolean;
+  created_at: number;
+  updated_at: number;
+  deleted_at?: number | null;
+};
+
 export const api = {
   async me(): Promise<User> {
     const me = await apiFetch<MeResponse>('/api/me');
-    return { id: me.id, username: me.username, is_admin: me.is_admin };
+    return {
+      id: me.id,
+      username: me.username,
+      is_admin: me.is_admin,
+      must_change_password: me.must_change_password,
+    };
   },
 
   async users(): Promise<User[]> {
     const users = await apiFetch<UserSummary[]>('/api/users');
-    return users.map((u) => ({ id: u.id, username: u.username, is_admin: u.is_admin }));
+    return users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      is_admin: u.is_admin,
+      must_change_password: false,
+    }));
   },
 
   async login(username: string, password: string): Promise<User> {
@@ -76,11 +101,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     });
-    return { id: me.id, username: me.username, is_admin: me.is_admin };
+    return {
+      id: me.id,
+      username: me.username,
+      is_admin: me.is_admin,
+      must_change_password: me.must_change_password,
+    };
   },
 
   async logout(): Promise<void> {
     await apiFetch<void>('/api/auth/logout', { method: 'POST' });
+  },
+
+  async changePassword(new_password: string): Promise<void> {
+    await apiFetch<void>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ new_password }),
+    });
   },
 
   async getSettings(): Promise<SettingsResponse> {
@@ -146,5 +183,34 @@ export const api = {
 
   async superlikes(): Promise<CardRef[]> {
     return await apiFetch<CardRef[]>('/api/superlikes');
+  },
+
+  async adminUsers(): Promise<AdminUserRow[]> {
+    return await apiFetch<AdminUserRow[]>('/api/admin/users');
+  },
+
+  async adminCreateUser(req: {
+    username: string;
+    password: string;
+    is_admin: boolean;
+  }): Promise<AdminUserRow> {
+    return await apiFetch<AdminUserRow>('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    });
+  },
+
+  async adminUpdateUser(
+    id: number,
+    patch: { username?: string; password?: string; is_admin?: boolean }
+  ): Promise<AdminUserRow> {
+    return await apiFetch<AdminUserRow>(`/api/admin/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async adminDeleteUser(id: number): Promise<void> {
+    await apiFetch<void>(`/api/admin/users/${id}`, { method: 'DELETE' });
   },
 };

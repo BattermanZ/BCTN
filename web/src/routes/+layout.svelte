@@ -17,6 +17,14 @@
       const me = await api.me();
       currentUser.set(me);
 
+      if (me.must_change_password) {
+        partnerUser.set(null);
+        if ($page.url.pathname !== '/change-password') {
+          await goto('/change-password');
+        }
+        return;
+      }
+
       const users = await api.users();
       const partner = users.find((u) => u.id !== me.id) ?? null;
       partnerUser.set(partner);
@@ -57,7 +65,7 @@
   <main class="mx-auto max-w-md px-4 pb-28 pt-4">
     {@render children()}
   </main>
-  {#if authChecked && $currentUser && $page.url.pathname !== '/login'}
+  {#if authChecked && $currentUser && !$currentUser.must_change_password && $page.url.pathname !== '/login' && $page.url.pathname !== '/change-password'}
     <BottomTabs />
   {/if}
 </div>

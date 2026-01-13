@@ -15,6 +15,12 @@
       const me = await api.login(username.trim(), password);
       currentUser.set(me);
 
+      if (me.must_change_password) {
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        await goto('/change-password');
+        return;
+      }
+
       const users = await api.users();
       const partner = users.find((u) => u.id !== me.id) ?? null;
       partnerUser.set(partner);

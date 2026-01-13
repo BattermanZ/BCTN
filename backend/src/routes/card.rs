@@ -669,7 +669,7 @@ async fn get_impl(
     card_key: &str,
     q: CardQuery,
 ) -> Result<CardDetailsResponse> {
-    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let kind = detect_kind(state, card_key).await?;
     let selected_countries = parse_countries(q.countries)?;
 

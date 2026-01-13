@@ -35,7 +35,7 @@ pub(crate) async fn get_settings(
 }
 
 async fn get_settings_impl(state: &AppState, jar: &CookieJar) -> Result<SettingsResponse> {
-    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     let row = sqlx::query(
         "SELECT show_last_name, last_name, best_pick_mode FROM user_settings WHERE user_id = ?1",
     )
@@ -70,7 +70,7 @@ async fn patch_settings_impl(
     jar: &CookieJar,
     req: PatchSettingsRequest,
 ) -> Result<SettingsResponse> {
-    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
 
     if let Some(ref ln) = req.last_name
         && (ln.trim().is_empty() || ln.len() > 64)

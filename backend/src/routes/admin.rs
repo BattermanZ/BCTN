@@ -36,6 +36,7 @@ pub(crate) struct UserRow {
     id: i64,
     username: String,
     is_admin: bool,
+    must_change_password: bool,
     created_at: i64,
     updated_at: i64,
     deleted_at: Option<i64>,
@@ -73,7 +74,7 @@ pub(crate) async fn list_users(State(state): State<AppState>, jar: CookieJar) ->
 
 async fn list_users_impl(state: &AppState) -> Result<Vec<UserRow>> {
     let rows = sqlx::query(
-        "SELECT id, username, is_admin, created_at, updated_at, deleted_at FROM app_user ORDER BY id",
+        "SELECT id, username, is_admin, must_change_password, created_at, updated_at, deleted_at FROM app_user ORDER BY id",
     )
     .fetch_all(&state.db)
     .await
@@ -85,6 +86,7 @@ async fn list_users_impl(state: &AppState) -> Result<Vec<UserRow>> {
             id: r.try_get("id").unwrap_or_default(),
             username: r.try_get("username").unwrap_or_default(),
             is_admin: r.try_get::<i64, _>("is_admin").unwrap_or(0) != 0,
+            must_change_password: r.try_get::<i64, _>("must_change_password").unwrap_or(0) != 0,
             created_at: r.try_get("created_at").unwrap_or_default(),
             updated_at: r.try_get("updated_at").unwrap_or_default(),
             deleted_at: r.try_get("deleted_at").ok(),
@@ -134,7 +136,7 @@ async fn create_user_impl(state: &AppState, req: CreateUserRequest) -> Result<Us
 
     let mut tx = state.db.begin().await?;
     let user_id = sqlx::query(
-        "INSERT INTO app_user (username, password_hash, is_admin, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+        "INSERT INTO app_user (username, password_hash, is_admin, must_change_password, created_at, updated_at) VALUES (?1, ?2, ?3, 1, ?4, ?4)",
     )
     .bind(req.username.trim())
     .bind(password_hash)
@@ -157,6 +159,7 @@ async fn create_user_impl(state: &AppState, req: CreateUserRequest) -> Result<Us
         id: user_id,
         username: req.username.trim().to_string(),
         is_admin: req.is_admin,
+        must_change_password: true,
         created_at: now,
         updated_at: now,
         deleted_at: None,
@@ -185,7 +188,7 @@ pub(crate) async fn update_user(
 
 async fn update_user_impl(state: &AppState, id: i64, req: UpdateUserRequest) -> Result<UserRow> {
     let row = sqlx::query(
-        "SELECT id, username, is_admin, created_at, updated_at, deleted_at FROM app_user WHERE id = ?1",
+        "SELECT id, username, is_admin, must_change_password, created_at, updated_at, deleted_at FROM app_user WHERE id = ?1",
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -194,6 +197,7 @@ async fn update_user_impl(state: &AppState, id: i64, req: UpdateUserRequest) -> 
 
     let mut username: String = row.try_get("username")?;
     let mut is_admin: i64 = row.try_get("is_admin")?;
+    let mut must_change_password: i64 = row.try_get("must_change_password")?;
     let created_at: i64 = row.try_get("created_at")?;
     let mut deleted_at: Option<i64> = row.try_get("deleted_at").ok();
 
@@ -222,17 +226,25 @@ async fn update_user_impl(state: &AppState, id: i64, req: UpdateUserRequest) -> 
 
     let mut tx = state.db.begin().await?;
     if let Some(ph) = password_hash {
+        must_change_password = 1;
         sqlx::query(
-            "UPDATE app_user SET username=?1, password_hash=?2, is_admin=?3, updated_at=?4, deleted_at=?5 WHERE id=?6",
+            "UPDATE app_user SET username=?1, password_hash=?2, is_admin=?3, must_change_password=?4, updated_at=?5, deleted_at=?6 WHERE id=?7",
         )
         .bind(&username)
         .bind(ph)
         .bind(is_admin)
+        .bind(must_change_password)
         .bind(now)
         .bind(deleted_at)
         .bind(id)
         .execute(&mut *tx)
         .await?;
+
+        sqlx::query("DELETE FROM app_session WHERE user_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .ok();
     } else {
         sqlx::query(
             "UPDATE app_user SET username=?1, is_admin=?2, updated_at=?3, deleted_at=?4 WHERE id=?5",
@@ -251,6 +263,7 @@ async fn update_user_impl(state: &AppState, id: i64, req: UpdateUserRequest) -> 
         id,
         username,
         is_admin: is_admin != 0,
+        must_change_password: must_change_password != 0,
         created_at,
         updated_at: now,
         deleted_at,
@@ -285,11 +298,16 @@ async fn delete_user_impl(state: &AppState, id: i64) -> Result<()> {
         bail!("cannot delete last active user");
     }
 
-    sqlx::query("UPDATE app_user SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2")
-        .bind(now_ts())
-        .bind(id)
-        .execute(&state.db)
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM name_match")
+        .execute(&mut *tx)
         .await
-        .context("soft delete user")?;
+        .ok();
+    sqlx::query("DELETE FROM app_user WHERE id = ?1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("delete user")?;
+    tx.commit().await?;
     Ok(())
 }

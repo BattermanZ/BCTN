@@ -85,7 +85,7 @@ async fn create_impl(
     jar: &CookieJar,
     req: CreateSwipeRequest,
 ) -> Result<CreateSwipeResponse> {
-    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
     validate_card_kind(&req.card_kind)?;
     validate_action(&req.action)?;
 
@@ -165,7 +165,7 @@ pub(crate) async fn undo(State(state): State<AppState>, jar: CookieJar) -> impl 
 }
 
 async fn undo_impl(state: &AppState, jar: &CookieJar) -> Result<UndoSwipeResponse> {
-    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let (user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
 
     let row = sqlx::query(
         "SELECT id, card_key, action FROM swipe WHERE user_id=?1 ORDER BY created_at DESC, id DESC LIMIT 1",
