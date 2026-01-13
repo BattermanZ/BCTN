@@ -18,6 +18,12 @@
 
   let feedGen = $state(0);
 
+  let spellingsPage = $state(0);
+  const spellingsPageSize = 200;
+  let spellingsLoadedPages = $state(0);
+  let spellingsHasMore = $state(false);
+  let spellingsLoadingPage = $state(false);
+
   let dragging = $state(false);
   let activePointerId = $state<number | null>(null);
   let startX = $state(0);
@@ -88,6 +94,13 @@
     }
   }
 
+  function resetSpellingsPagination() {
+    spellingsPage = 0;
+    spellingsLoadedPages = 0;
+    spellingsHasMore = false;
+    spellingsLoadingPage = false;
+  }
+
   function resetDeck() {
     feedGen += 1;
     resetDrag();
@@ -98,6 +111,7 @@
     deck = [];
     loading = false;
     detailsLoading = false;
+    resetSpellingsPagination();
     void refillDeck();
   }
 
@@ -117,10 +131,13 @@
       const full = await api.cardDetails(card.card_key, {
         countries: $filters.countries.join(','),
         page: 0,
-        page_size: 200,
+        page_size: spellingsPageSize,
       });
       if (deck[0]?.card_key === card.card_key) {
         deck = [full, ...deck.slice(1)];
+        spellingsPage = 0;
+        spellingsLoadedPages = full.all_spellings ? 1 : 0;
+        spellingsHasMore = (full.all_spellings?.length ?? 0) === spellingsPageSize;
       }
     } catch (e) {
       const status = (e as { status?: number } | null)?.status;
@@ -129,6 +146,51 @@
       }
     } finally {
       detailsLoading = false;
+    }
+  }
+
+  async function goToSpellingsPage(nextPage: number) {
+    if (!topCard) return;
+    if (!showAllSpellings) return;
+    if (nextPage < 0) return;
+
+    // If already loaded, just switch pages.
+    if (nextPage < spellingsLoadedPages) {
+      spellingsPage = nextPage;
+      return;
+    }
+
+    // Only support sequential paging (avoid skipping pages).
+    if (nextPage !== spellingsLoadedPages) {
+      return;
+    }
+    if (!spellingsHasMore) {
+      return;
+    }
+    if (spellingsLoadingPage) return;
+    spellingsLoadingPage = true;
+    try {
+      const res = await api.cardDetails(topCard.card_key, {
+        countries: $filters.countries.join(','),
+        page: nextPage,
+        page_size: spellingsPageSize,
+      });
+      if (deck[0]?.card_key !== topCard.card_key) return;
+
+      const existing = deck[0].all_spellings ?? [];
+      const next = res.all_spellings ?? [];
+      deck = [{ ...deck[0], all_spellings: [...existing, ...next] }, ...deck.slice(1)];
+
+      spellingsLoadedPages = nextPage + 1;
+      spellingsPage = nextPage;
+      spellingsHasMore = next.length === spellingsPageSize;
+    } catch (e) {
+      const status = (e as { status?: number } | null)?.status;
+      if (status === 401) {
+        await goto('/login');
+      }
+    } finally {
+      spellingsLoadingPage = false;
     }
   }
 
@@ -348,6 +410,7 @@
     deck = deck.slice(1);
     resetAnimation();
     showAllSpellings = false;
+    resetSpellingsPagination();
     await refillDeck();
     // reset the stack back to its resting (stacked) state immediately after advancing
     if (promoteRafId !== null) {
@@ -574,24 +637,63 @@
                     <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
                       <div class="flex items-center justify-between gap-3">
                         <div class="text-sm font-semibold text-zinc-900">Spellings</div>
-                        {#if detailsLoading && !topCard.all_spellings}
-                          <Badge tone="neutral" label="Loading…" />
-                        {/if}
-                        {#if topCard.all_spellings && topCard.all_spellings.length > 6}
-                          <button
-                            type="button"
-                            class="text-xs font-semibold text-indigo-600 hover:underline"
-                            onclick={() => (showAllSpellings = !showAllSpellings)}
-                          >
-                            {showAllSpellings ? 'Show fewer' : 'See all'}
-                          </button>
-                        {/if}
+                        <div class="flex items-center gap-3">
+                          {#if detailsLoading && !topCard.all_spellings}
+                            <Badge tone="neutral" label="Loading…" />
+                          {/if}
+
+                          {#if topCard.all_spellings && topCard.all_spellings.length > 6}
+                            <button
+                              type="button"
+                              class="text-xs font-semibold text-indigo-600 hover:underline"
+                              onclick={() => {
+                                showAllSpellings = !showAllSpellings;
+                                spellingsPage = 0;
+                              }}
+                            >
+                              {showAllSpellings ? 'Show fewer' : 'See all'}
+                            </button>
+                          {/if}
+                        </div>
                       </div>
+
+                      {#if showAllSpellings && topCard.all_spellings}
+                        <div class="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                          <div>Page {spellingsPage + 1}</div>
+                          <div class="flex items-center gap-2">
+                            <button
+                              type="button"
+                              class="rounded-full border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 disabled:opacity-50"
+                              onclick={() => goToSpellingsPage(spellingsPage - 1)}
+                              disabled={spellingsPage === 0 || spellingsLoadingPage}
+                            >
+                              Prev
+                            </button>
+                            <button
+                              type="button"
+                              class="rounded-full border border-zinc-200 bg-white px-2 py-1 font-semibold text-zinc-700 disabled:opacity-50"
+                              onclick={() => goToSpellingsPage(spellingsPage + 1)}
+                              disabled={spellingsLoadingPage ||
+                                (!spellingsHasMore && spellingsPage >= spellingsLoadedPages - 1)}
+                            >
+                              {spellingsLoadingPage ? 'Loading…' : 'Next'}
+                            </button>
+                          </div>
+                        </div>
+                      {/if}
+
                       <div class="mt-3 flex flex-wrap gap-2">
                         {#if detailsLoading && !topCard.all_spellings}
                           <div class="text-sm text-zinc-600">Fetching spellings…</div>
                         {:else}
-                          {#each topCard.all_spellings?.slice(0, showAllSpellings ? 80 : 10) ?? topCard.spellings_preview as s (s)}
+                          {@const all = topCard.all_spellings ?? topCard.spellings_preview}
+                          {@const slice = showAllSpellings
+                            ? all.slice(
+                                spellingsPage * spellingsPageSize,
+                                spellingsPage * spellingsPageSize + spellingsPageSize
+                              )
+                            : all.slice(0, 10)}
+                          {#each slice as s (s)}
                             <span
                               class="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700"
                             >

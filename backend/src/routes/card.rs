@@ -583,7 +583,9 @@ async fn get_impl(
         CardKind::Concept => within_concept_variants(state, card_key)
             .await
             .unwrap_or_default(),
-        CardKind::Group => Vec::new(),
+        CardKind::Group => within_concept_variants(state, card_key)
+            .await
+            .unwrap_or_default(),
     };
     let last5_year_ranks = last5_year_ranks_materialized(state, kind, card_key).await?;
 
