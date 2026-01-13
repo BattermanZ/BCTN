@@ -824,21 +824,20 @@
                       </div>
                     </section>
 
-                    <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
-                      <button
-                        type="button"
-                        class="w-full text-left"
-                        onclick={() => (showRankCounts = !showRankCounts)}
-                      >
-                        <div class="flex items-center justify-between gap-3">
-                          <div class="text-sm font-semibold text-zinc-900">
-                            {showRankCounts ? 'Occurrences (last 5 years)' : 'Rank (last 5 years)'}
-                          </div>
-                          <div class="text-xs font-semibold text-indigo-600">
-                            {showRankCounts ? 'Show ranks' : 'Show counts'}
-                          </div>
+                    <button
+                      type="button"
+                      class="w-full cursor-pointer rounded-2xl border border-zinc-200 bg-white/80 p-4 text-left"
+                      onclick={() => (showRankCounts = !showRankCounts)}
+                      aria-label="Toggle rank and occurrences"
+                    >
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="text-sm font-semibold text-zinc-900">
+                          {showRankCounts ? 'Occurrences (last 5 years)' : 'Rank (last 5 years)'}
                         </div>
-                      </button>
+                        <div class="text-xs font-semibold text-indigo-600">
+                          {showRankCounts ? 'Show ranks' : 'Show counts'}
+                        </div>
+                      </div>
                       {#if detailsLoading && !topCard.last5_year_ranks}
                         <div class="mt-2 text-sm text-zinc-600">Fetching ranks…</div>
                       {:else if topCard.last5_years}
@@ -868,9 +867,6 @@
                                     </div>
                                   {/each}
                                 </div>
-                                <div class="mt-2 text-[11px] text-zinc-400">
-                                  Tap to toggle ranks ↔ counts
-                                </div>
                               </div>
                             {/if}
                           {/each}
@@ -878,7 +874,7 @@
                       {:else}
                         <div class="mt-2 text-sm text-zinc-600">Not available.</div>
                       {/if}
-                    </section>
+                    </button>
                   </div>
 
                   {#if topGenderInfo.note}
