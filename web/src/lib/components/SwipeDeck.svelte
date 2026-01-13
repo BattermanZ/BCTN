@@ -762,12 +762,13 @@
                       <div class="mt-3 space-y-4">
                         {#each $filters.countries as country (country)}
                           {@const split = splitFor(country)}
+                          {@const total = split ? split.male + split.female : 0}
                           <div>
                             <div class="flex items-center justify-between text-xs text-zinc-500">
                               <div class="font-semibold">{country}</div>
-                              {#if split && split.male + split.female > 0}
+                              {#if split && total > 0}
                                 <div>
-                                  M {Math.round(split.male_pct)}% · F {Math.round(
+                                  Male {Math.round(split.male_pct)}% · Female {Math.round(
                                     split.female_pct
                                   )}%
                                 </div>
@@ -776,17 +777,26 @@
                               {/if}
                             </div>
                             <div class="mt-2">
-                              <div class="relative h-3 w-full rounded-full bg-zinc-200">
-                                {#if split && split.male + split.female > 0}
+                              <div
+                                class="relative h-3 w-full rounded-full border border-zinc-200"
+                                style="background: linear-gradient(90deg, rgba(59,130,246,0.30) 0%, rgba(236,72,153,0.30) 100%);"
+                              >
+                                <div class="absolute inset-0 rounded-full bg-white/30"></div>
+                                {#if split && total > 0}
+                                  {@const femalePct = split.female_pct}
                                   <div
-                                    class="absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border border-white shadow-sm"
-                                    style={`left: clamp(0px, calc(${split.male_pct}% - 10px), calc(100% - 20px)); background: rgb(${topTintRgb});`}
+                                    class="absolute top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-full bg-zinc-700/40"
+                                    style={`left: clamp(0px, calc(${femalePct}% - 1px), calc(100% - 2px));`}
+                                  ></div>
+                                  <div
+                                    class="absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow-sm ring-1 ring-zinc-900/10"
+                                    style={`left: clamp(0px, calc(${femalePct}% - 10px), calc(100% - 20px));`}
                                   ></div>
                                 {/if}
                               </div>
                               <div class="mt-1 flex justify-between text-[10px] text-zinc-400">
-                                <div>M</div>
-                                <div>F</div>
+                                <div>Male</div>
+                                <div>Female</div>
                               </div>
                             </div>
                           </div>
