@@ -28,6 +28,9 @@ export type Card = {
   spellings_preview: string[];
   score?: number;
   per_country: PerCountryStats[];
+  sex_split?: Partial<
+    Record<CountryCode, { male: number; female: number; male_pct: number; female_pct: number }>
+  >;
   all_spellings?: string[];
   within_concept_variants?: string[];
   last5_year_ranks?: Partial<Record<CountryCode, Array<{ year: number; rank: number }>>>;

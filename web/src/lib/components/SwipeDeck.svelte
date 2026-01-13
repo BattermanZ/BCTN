@@ -522,6 +522,11 @@
       .filter(([, ranks]) => Array.isArray(ranks) && ranks.length > 0)
       .map(([country, ranks]) => [country, ranks as Array<RankPoint>]);
   }
+
+  type SexSplit = NonNullable<Card['sex_split']>[CountryCode];
+  function splitFor(country: CountryCode): SexSplit | undefined {
+    return topCard?.sex_split?.[country];
+  }
 </script>
 
 {#if !topCard}
@@ -747,6 +752,43 @@
                           <div class="flex items-center justify-between text-sm">
                             <div class="font-medium text-zinc-800">{c.country}</div>
                             <div class="text-zinc-600">{Math.round(c.ppm)} ppm</div>
+                          </div>
+                        {/each}
+                      </div>
+                    </section>
+
+                    <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
+                      <div class="text-sm font-semibold text-zinc-900">Sex split</div>
+                      <div class="mt-3 space-y-4">
+                        {#each $filters.countries as country (country)}
+                          {@const split = splitFor(country)}
+                          <div>
+                            <div class="flex items-center justify-between text-xs text-zinc-500">
+                              <div class="font-semibold">{country}</div>
+                              {#if split && split.male + split.female > 0}
+                                <div>
+                                  M {Math.round(split.male_pct)}% · F {Math.round(
+                                    split.female_pct
+                                  )}%
+                                </div>
+                              {:else}
+                                <div>—</div>
+                              {/if}
+                            </div>
+                            <div class="mt-2">
+                              <div class="relative h-3 w-full rounded-full bg-zinc-200">
+                                {#if split && split.male + split.female > 0}
+                                  <div
+                                    class="absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border border-white shadow-sm"
+                                    style={`left: calc(${split.male_pct}% - 10px); background: rgb(${topTintRgb});`}
+                                  ></div>
+                                {/if}
+                              </div>
+                              <div class="mt-1 flex justify-between text-[10px] text-zinc-400">
+                                <div>M</div>
+                                <div>F</div>
+                              </div>
+                            </div>
                           </div>
                         {/each}
                       </div>

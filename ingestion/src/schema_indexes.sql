@@ -11,6 +11,9 @@ CREATE INDEX IF NOT EXISTS idx_name_observation_name_string_run_country
 -- Speeds materialization queries filtering primarily by run_id/country/year.
 CREATE INDEX IF NOT EXISTS idx_name_observation_run_country_year_name_string
   ON name_observation(run_id, country, year, name_string_id);
+-- Speeds rank materialization queries grouping by (run_id,country,year,name_raw).
+CREATE INDEX IF NOT EXISTS idx_name_observation_run_country_year_name_raw
+  ON name_observation(run_id, country, year, name_raw);
 CREATE INDEX IF NOT EXISTS idx_name_observation_run_name_string
   ON name_observation(run_id, name_string_id);
 CREATE INDEX IF NOT EXISTS idx_name_observation_year ON name_observation(year);

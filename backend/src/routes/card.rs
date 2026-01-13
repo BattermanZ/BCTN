@@ -19,6 +19,7 @@ pub(crate) struct CardDetailsResponse {
     spellings_preview: Vec<String>,
     score: Option<i64>,
     per_country: Vec<CountrySummary>,
+    sex_split: BTreeMap<String, SexSplit>,
     all_spellings: Vec<String>,
     within_concept_variants: Vec<String>,
     last5_year_ranks: BTreeMap<String, Vec<RankPoint>>,
@@ -30,6 +31,14 @@ pub(crate) struct CountrySummary {
     ppm: f64,
     top100_any: bool,
     gender: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SexSplit {
+    male: i64,
+    female: i64,
+    male_pct: f64,
+    female_pct: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -305,6 +314,59 @@ async fn per_country_for_concept(state: &AppState, concept_id: i64) -> Result<Ve
     Ok(out)
 }
 
+async fn sex_split_for_concept(
+    state: &AppState,
+    concept_id: i64,
+) -> Result<BTreeMap<String, SexSplit>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+          ct.country AS country,
+          COALESCE(ct.male, 0) AS male,
+          COALESCE(ct.female, 0) AS female
+        FROM concept_country_window_total ct
+        WHERE ct.concept_id = ?1 AND ct.country IN ('US','FR','CL')
+        "#,
+    )
+    .bind(concept_id)
+    .fetch_all(&state.names_db)
+    .await
+    .context("load sex split (concept)")?;
+
+    let mut out = BTreeMap::<String, SexSplit>::new();
+    for country in ["US", "FR", "CL"] {
+        let mut male = 0i64;
+        let mut female = 0i64;
+        for r in &rows {
+            let c: String = r.try_get("country")?;
+            if c == country {
+                male = r.try_get("male")?;
+                female = r.try_get("female")?;
+                break;
+            }
+        }
+        let total = male + female;
+        let (male_pct, female_pct) = if total <= 0 {
+            (0.0, 0.0)
+        } else {
+            (
+                male as f64 * 100.0 / total as f64,
+                female as f64 * 100.0 / total as f64,
+            )
+        };
+        out.insert(
+            country.to_string(),
+            SexSplit {
+                male,
+                female,
+                male_pct,
+                female_pct,
+            },
+        );
+    }
+    Ok(out)
+}
+
 async fn per_country_for_group(state: &AppState, group_key: &str) -> Result<Vec<CountrySummary>> {
     async fn load_for(
         state: &AppState,
@@ -351,6 +413,59 @@ async fn per_country_for_group(state: &AppState, group_key: &str) -> Result<Vec<
             top100_any,
             gender: gender_label(male, female),
         });
+    }
+    Ok(out)
+}
+
+async fn sex_split_for_group(
+    state: &AppState,
+    group_key: &str,
+) -> Result<BTreeMap<String, SexSplit>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+          gt.country AS country,
+          COALESCE(gt.male, 0) AS male,
+          COALESCE(gt.female, 0) AS female
+        FROM variant_group_country_window_total gt
+        WHERE gt.variant_group_key = ?1 AND gt.country IN ('US','FR','CL')
+        "#,
+    )
+    .bind(group_key)
+    .fetch_all(&state.names_db)
+    .await
+    .context("load sex split (group)")?;
+
+    let mut out = BTreeMap::<String, SexSplit>::new();
+    for country in ["US", "FR", "CL"] {
+        let mut male = 0i64;
+        let mut female = 0i64;
+        for r in &rows {
+            let c: String = r.try_get("country")?;
+            if c == country {
+                male = r.try_get("male")?;
+                female = r.try_get("female")?;
+                break;
+            }
+        }
+        let total = male + female;
+        let (male_pct, female_pct) = if total <= 0 {
+            (0.0, 0.0)
+        } else {
+            (
+                male as f64 * 100.0 / total as f64,
+                female as f64 * 100.0 / total as f64,
+            )
+        };
+        out.insert(
+            country.to_string(),
+            SexSplit {
+                male,
+                female,
+                male_pct,
+                female_pct,
+            },
+        );
     }
     Ok(out)
 }
@@ -545,6 +660,13 @@ async fn get_impl(
             per_country_for_concept(state, concept_id).await?
         }
     };
+    let sex_split = match kind {
+        CardKind::Group => sex_split_for_group(state, card_key).await?,
+        CardKind::Concept => {
+            let concept_id = concept_id_for_key(state, card_key).await?;
+            sex_split_for_concept(state, concept_id).await?
+        }
+    };
 
     let best_pick = best_pick_mode(state, user_id).await?;
     let score = if best_pick {
@@ -596,6 +718,7 @@ async fn get_impl(
         spellings_preview,
         score,
         per_country,
+        sex_split,
         all_spellings,
         within_concept_variants,
         last5_year_ranks,
