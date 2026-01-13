@@ -43,6 +43,16 @@
     }
   }
 
+  async function logout() {
+    try {
+      await api.logout();
+    } finally {
+      currentUser.set(null);
+      partnerUser.set(null);
+      await goto('/login');
+    }
+  }
+
   const popularityLevels = ['extra_rare', 'rare', 'common', 'top'] as const;
   const popularityLabel: Record<(typeof popularityLevels)[number], string> = {
     extra_rare: 'Extra rare',
@@ -217,6 +227,14 @@
       >
         Open admin
       </a>
+
+      <button
+        type="button"
+        class="mt-3 inline-flex w-full items-center justify-center rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50"
+        onclick={() => void logout()}
+      >
+        Log out
+      </button>
     </div>
   </section>
 </div>
