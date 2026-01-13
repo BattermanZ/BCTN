@@ -11,6 +11,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 
+use crate::display::{clean_spelling_display, dedup_preserve_order};
 use crate::state::{AppState, CountryTotals};
 
 #[derive(Debug, Deserialize)]
@@ -568,7 +569,7 @@ async fn build_response(
     Ok(FeedCardResponse {
         card_key: chosen.card_key.clone(),
         card_kind: chosen.card_kind.as_str().to_string(),
-        display_name: chosen.display_name.clone(),
+        display_name: clean_spelling_display(&chosen.display_name),
         spellings_preview: preview,
         score,
         per_country,
@@ -770,7 +771,10 @@ async fn spellings_preview_materialized(
     for r in rows {
         let sk: String = r.try_get("subset_key")?;
         let name_raw: String = r.try_get("name_raw")?;
-        by_subset.entry(sk).or_default().push(name_raw);
+        by_subset
+            .entry(sk)
+            .or_default()
+            .push(clean_spelling_display(&name_raw));
     }
 
     // Country top-1 spellings.
@@ -783,16 +787,20 @@ async fn spellings_preview_materialized(
         }
     }
 
-    let subset_list = by_subset.get(&subset_key).cloned().unwrap_or_default();
+    let subset_list = dedup_preserve_order(by_subset.get(&subset_key).cloned().unwrap_or_default());
     if selected_countries.len() > 1 && country_tops.len() == 1 {
-        return Ok(subset_list.into_iter().take(3).collect());
+        return Ok(dedup_preserve_order(subset_list)
+            .into_iter()
+            .take(3)
+            .collect());
     }
     if country_tops.len() >= 3 {
-        country_tops.truncate(3);
-        return Ok(country_tops);
+        let mut out = dedup_preserve_order(country_tops);
+        out.truncate(3);
+        return Ok(out);
     }
 
-    let mut out = country_tops;
+    let mut out = dedup_preserve_order(country_tops);
     for g in subset_list {
         if out.len() >= 3 {
             break;
@@ -801,7 +809,7 @@ async fn spellings_preview_materialized(
             out.push(g);
         }
     }
-    Ok(out)
+    Ok(dedup_preserve_order(out))
 }
 
 async fn last5_year_ranks_materialized(

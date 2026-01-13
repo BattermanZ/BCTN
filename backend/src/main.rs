@@ -1,4 +1,5 @@
 mod bootstrap;
+mod display;
 mod routes;
 mod state;
 

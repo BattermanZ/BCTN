@@ -9,6 +9,7 @@ use axum_extra::extract::CookieJar;
 use serde::Serialize;
 use sqlx::{QueryBuilder, Row, Sqlite};
 
+use crate::display::{clean_spelling_display, dedup_preserve_order};
 use crate::state::{AppState, CountryTotals};
 
 #[derive(Debug, Serialize)]
@@ -215,7 +216,7 @@ async fn display_name_for_concept(state: &AppState, concept_key: &str) -> Result
     .fetch_one(&state.names_db)
     .await
     .context("load display name")?;
-    Ok(name)
+    Ok(clean_spelling_display(&name))
 }
 
 async fn within_concept_variants(state: &AppState, concept_key: &str) -> Result<Vec<String>> {
@@ -235,7 +236,12 @@ async fn within_concept_variants(state: &AppState, concept_key: &str) -> Result<
     .context("load within concept variants")?;
 
     let preferred = display_name_for_concept(state, concept_key).await?;
-    Ok(rows.into_iter().filter(|s| s != &preferred).collect())
+    let cleaned = rows
+        .into_iter()
+        .map(|s| clean_spelling_display(&s))
+        .filter(|s| s != &preferred)
+        .collect::<Vec<_>>();
+    Ok(dedup_preserve_order(cleaned))
 }
 
 async fn all_spellings_materialized(
@@ -263,7 +269,11 @@ async fn all_spellings_materialized(
     .fetch_all(&state.names_db)
     .await
     .context("load all spellings (materialized)")?;
-    Ok(rows)
+    Ok(dedup_preserve_order(
+        rows.into_iter()
+            .map(|s| clean_spelling_display(&s))
+            .collect(),
+    ))
 }
 
 async fn per_country_for_concept(state: &AppState, concept_id: i64) -> Result<Vec<CountrySummary>> {
@@ -559,7 +569,10 @@ async fn spellings_preview_materialized(
     for r in rows {
         let sk: String = r.try_get("subset_key")?;
         let name_raw: String = r.try_get("name_raw")?;
-        by_subset.entry(sk).or_default().push(name_raw);
+        by_subset
+            .entry(sk)
+            .or_default()
+            .push(clean_spelling_display(&name_raw));
     }
 
     let mut country_tops = Vec::<String>::new();
@@ -571,17 +584,20 @@ async fn spellings_preview_materialized(
         }
     }
 
-    let subset_list = by_subset.get(&subset_key).cloned().unwrap_or_default();
+    let subset_list = dedup_preserve_order(by_subset.get(&subset_key).cloned().unwrap_or_default());
     if selected_countries.len() > 1 && country_tops.len() == 1 {
-        return Ok(subset_list.into_iter().take(3).collect());
+        return Ok(dedup_preserve_order(subset_list)
+            .into_iter()
+            .take(3)
+            .collect());
     }
     if country_tops.len() >= 3 {
-        let mut out = country_tops;
+        let mut out = dedup_preserve_order(country_tops);
         out.truncate(3);
         return Ok(out);
     }
 
-    let mut out = country_tops;
+    let mut out = dedup_preserve_order(country_tops);
     for g in subset_list {
         if out.len() >= 3 {
             break;
@@ -590,7 +606,7 @@ async fn spellings_preview_materialized(
             out.push(g);
         }
     }
-    Ok(out)
+    Ok(dedup_preserve_order(out))
 }
 
 async fn last5_year_ranks_materialized(

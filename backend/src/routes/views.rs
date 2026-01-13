@@ -6,6 +6,7 @@ use axum::{Json, debug_handler};
 use axum_extra::extract::CookieJar;
 use serde::Serialize;
 
+use crate::display::clean_spelling_display;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -39,7 +40,7 @@ async fn display_name(state: &AppState, card_key: &str) -> Result<String> {
     .fetch_one(&state.names_db)
     .await
     .context("load display name")?;
-    Ok(name)
+    Ok(clean_spelling_display(&name))
 }
 
 async fn card_ref(state: &AppState, card_key: &str) -> Result<CardRef> {
