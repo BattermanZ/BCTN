@@ -89,7 +89,7 @@ async fn list_users_impl(state: &AppState) -> Result<Vec<UserRow>> {
             must_change_password: r.try_get::<i64, _>("must_change_password").unwrap_or(0) != 0,
             created_at: r.try_get("created_at").unwrap_or_default(),
             updated_at: r.try_get("updated_at").unwrap_or_default(),
-            deleted_at: r.try_get("deleted_at").ok(),
+            deleted_at: r.try_get::<Option<i64>, _>("deleted_at").unwrap_or(None),
         })
         .collect();
     Ok(users)
@@ -199,7 +199,9 @@ async fn update_user_impl(state: &AppState, id: i64, req: UpdateUserRequest) -> 
     let mut is_admin: i64 = row.try_get("is_admin")?;
     let mut must_change_password: i64 = row.try_get("must_change_password")?;
     let created_at: i64 = row.try_get("created_at")?;
-    let mut deleted_at: Option<i64> = row.try_get("deleted_at").ok();
+    let mut deleted_at: Option<i64> = row
+        .try_get::<Option<i64>, _>("deleted_at")?
+        .filter(|v| *v != 0);
 
     if let Some(u) = req.username {
         if u.trim().is_empty() {
