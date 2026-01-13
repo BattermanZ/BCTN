@@ -498,7 +498,15 @@
   }
 
   function canSwipe(): boolean {
-    return Boolean(topCard) && !dragging && !animating && !flipped;
+    return Boolean(topCard) && !dragging && !animating;
+  }
+
+  function maybeFlipBack(e: MouseEvent) {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('button,a,input,select,textarea,[role="button"]')) return;
+    flipped = false;
+    showAllSpellings = false;
   }
 
   function genderForSelected(card: Card): { gender: GenderLabel; note?: string } {
@@ -706,6 +714,16 @@
 
               <div
                 class="absolute inset-0 overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm [backface-visibility:hidden] [transform:rotateY(180deg)]"
+                onclick={maybeFlipBack}
+                role="button"
+                tabindex="0"
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    flipped = false;
+                    showAllSpellings = false;
+                  }
+                }}
               >
                 <div
                   class="pointer-events-none absolute inset-0"

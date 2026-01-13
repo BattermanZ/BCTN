@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from '$lib/components/BottomSheet.svelte';
   import Badge from '$lib/components/Badge.svelte';
-  import NameCard from '$lib/components/NameCard.svelte';
+  import FullCard from '$lib/components/FullCard.svelte';
   import { api, type CardRef } from '$lib/api';
   import { filters, settings } from '$lib/stores/app';
   import type { Card } from '$lib/types';
@@ -35,7 +35,11 @@
 
   async function open(ref: CardRef) {
     try {
-      selected = await api.cardDetails(ref.card_key);
+      selected = await api.cardDetails(ref.card_key, {
+        countries: $filters.countries.join(','),
+        page: 0,
+        page_size: 200,
+      });
       sheetOpen = true;
     } catch (e) {
       const status = (e as { status?: number } | null)?.status;
@@ -128,8 +132,8 @@
   }}
 >
   {#if selected}
-    <NameCard
-      card={selected}
+    <FullCard
+      initialCard={selected}
       showLastName={$settings.showLastName}
       lastName={$settings.lastName}
       selectedCountries={$filters.countries}
