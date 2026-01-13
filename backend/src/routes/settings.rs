@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Json, debug_handler};
@@ -60,8 +61,13 @@ async fn get_settings_impl(
 pub(crate) async fn patch_settings(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<PatchSettingsRequest>,
 ) -> impl IntoResponse {
+    if let Err(err) = super::auth::ensure_same_origin(&headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     match patch_settings_impl(&state, jar, req).await {
         Ok((jar, settings)) => (jar, Json(settings)).into_response(),
         Err(err) => {

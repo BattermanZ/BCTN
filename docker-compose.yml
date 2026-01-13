@@ -13,6 +13,15 @@ services:
       BCTN_APP_DB: /data/bctn_app.sqlite
       BCTN_NAMES_DB: /app/data/bctn.sqlite
       BCTN_STATIC_DIR: /app/web/build
+      BCTN_COOKIE_SECURE: "true"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
     # Run as the host user (typical Linux desktop/server default).
     # Ensure the host `./data` directory is writable by uid/gid 1000, or SQLite will fail to create/open the DB.
     user: "1000:1000"

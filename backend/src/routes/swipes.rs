@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Json, debug_handler};
@@ -69,8 +70,13 @@ async fn partner_user_id(state: &AppState, user_id: i64) -> Result<i64> {
 pub(crate) async fn create(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<CreateSwipeRequest>,
 ) -> impl IntoResponse {
+    if let Err(err) = super::auth::ensure_same_origin(&headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     match create_impl(&state, jar, req).await {
         Ok((jar, resp)) => (jar, Json(resp)).into_response(),
         Err(err) => {
@@ -163,7 +169,15 @@ async fn create_impl(
 }
 
 #[debug_handler]
-pub(crate) async fn undo(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
+pub(crate) async fn undo(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(err) = super::auth::ensure_same_origin(&headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     match undo_impl(&state, jar).await {
         Ok((jar, resp)) => (jar, Json(resp)).into_response(),
         Err(err) => {

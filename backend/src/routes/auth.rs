@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Json, debug_handler};
@@ -16,6 +17,7 @@ use crate::state::AppState;
 const SESSION_COOKIE: &str = "bctn_session";
 const SESSION_DAYS: i64 = 90;
 const SESSION_RENEW_THRESHOLD_DAYS: i64 = 30;
+const CSRF_ORIGIN_HEADER: &str = "origin";
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoginRequest {
@@ -51,6 +53,65 @@ fn token_hash(token: &str) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(token.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+fn client_id_from_headers(headers: &HeaderMap) -> String {
+    fn first_ip(v: &str) -> Option<&str> {
+        v.split(',')
+            .next()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+    }
+
+    if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+        && let Some(ip) = first_ip(v)
+    {
+        return ip.to_string();
+    }
+    if let Some(v) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let s = v.trim();
+        if !s.is_empty() {
+            return s.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+pub(crate) fn ensure_same_origin(headers: &HeaderMap) -> Result<()> {
+    // Simple CSRF mitigation: if the browser sends an Origin header, require it matches the Host.
+    // Reverse proxies typically preserve Origin, and this blocks cross-site POST/PATCH/DELETE.
+    let origin = headers
+        .get(CSRF_ORIGIN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string());
+    let Some(origin) = origin else {
+        return Ok(());
+    };
+
+    let origin_host = origin
+        .split("://")
+        .nth(1)
+        .unwrap_or(&origin)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+
+    if origin_host.is_empty() || host.is_empty() {
+        anyhow::bail!("invalid origin");
+    }
+    if origin_host != host {
+        anyhow::bail!("cross-origin request blocked");
+    }
+    Ok(())
 }
 
 pub(crate) async fn require_session_user(
@@ -91,24 +152,30 @@ pub(crate) async fn require_session_user(
     let must_change_password_i64: i64 = row.try_get("must_change_password")?;
     let expires_at: i64 = row.try_get("expires_at")?;
 
-    sqlx::query("UPDATE app_session SET last_seen_at = ?1 WHERE session_token_hash = ?2")
-        .bind(now)
-        .bind(&session_token_hash)
-        .execute(&state.db)
-        .await
-        .ok();
+    if let Err(err) =
+        sqlx::query("UPDATE app_session SET last_seen_at = ?1 WHERE session_token_hash = ?2")
+            .bind(now)
+            .bind(&session_token_hash)
+            .execute(&state.db)
+            .await
+    {
+        tracing::warn!(error=%err, "session_last_seen_update_failed");
+    }
 
     let remaining = expires_at - now;
     let renew_threshold = SESSION_RENEW_THRESHOLD_DAYS * 24 * 60 * 60;
     if remaining <= renew_threshold {
         let new_expires = now + SESSION_DAYS * 24 * 60 * 60;
 
-        sqlx::query("UPDATE app_session SET expires_at = ?1 WHERE session_token_hash = ?2")
-            .bind(new_expires)
-            .bind(&session_token_hash)
-            .execute(&state.db)
-            .await
-            .ok();
+        if let Err(err) =
+            sqlx::query("UPDATE app_session SET expires_at = ?1 WHERE session_token_hash = ?2")
+                .bind(new_expires)
+                .bind(&session_token_hash)
+                .execute(&state.db)
+                .await
+        {
+            tracing::warn!(error=%err, "session_expires_update_failed");
+        }
 
         let cookie = Cookie::build((SESSION_COOKIE, token))
             .http_only(true)
@@ -153,8 +220,17 @@ pub(crate) async fn require_session_user_ready(
 pub(crate) async fn login(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    let now = now_ts();
+    let client_id = client_id_from_headers(&headers);
+    let key = format!("{}:{}", client_id, req.username.trim().to_lowercase());
+    if state.login_limiter.record_and_is_limited(&key, now).await {
+        tracing::warn!(client_id=%client_id, "login_rate_limited");
+        return (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response();
+    }
+
     match login_impl(&state, jar, req).await {
         Ok(resp) => resp.into_response(),
         Err(err) => {
@@ -169,6 +245,8 @@ async fn login_impl(
     jar: CookieJar,
     req: LoginRequest,
 ) -> Result<impl IntoResponse> {
+    static DUMMY_HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
     let row = sqlx::query(
         r#"
         SELECT id, username, password_hash, is_admin, must_change_password
@@ -177,9 +255,19 @@ async fn login_impl(
         "#,
     )
     .bind(req.username)
-    .fetch_one(&state.db)
+    .fetch_optional(&state.db)
     .await
     .context("load user")?;
+
+    let Some(row) = row else {
+        let dummy = DUMMY_HASH.get_or_init(|| {
+            hash_password("dummy-password").expect("dummy hash generation should succeed")
+        });
+        if let Ok(parsed) = PasswordHash::new(dummy) {
+            let _ = Argon2::default().verify_password(req.password.as_bytes(), &parsed);
+        }
+        anyhow::bail!("invalid credentials");
+    };
 
     let user_id: i64 = row.try_get("id")?;
     let username: String = row.try_get("username")?;
@@ -232,7 +320,14 @@ async fn login_impl(
 }
 
 #[debug_handler]
-pub(crate) async fn logout(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
+pub(crate) async fn logout(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if ensure_same_origin(&headers).is_err() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Some(token) = jar.get(SESSION_COOKIE).map(|c| c.value().to_string()) else {
         return (jar, StatusCode::NO_CONTENT).into_response();
     };
@@ -299,8 +394,13 @@ fn hash_password(password: &str) -> Result<String> {
 pub(crate) async fn change_password(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<ChangePasswordRequest>,
 ) -> impl IntoResponse {
+    if let Err(err) = ensure_same_origin(&headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     match change_password_impl(&state, jar, req).await {
         Ok(jar) => (jar, StatusCode::NO_CONTENT).into_response(),
         Err(err) => {

@@ -7,9 +7,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use axum::http::HeaderName;
+use axum::http::HeaderValue;
+use axum::http::header;
 use clap::Parser;
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -75,9 +79,32 @@ async fn main() -> Result<()> {
     }
 
     let static_service = ServeDir::new(&args.static_dir).append_index_html_on_directories(true);
-    let app = router(state)
+    let mut app = router(state)
         .nest_service("/", static_service)
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
+        ));
+
+    if args.cookie_secure {
+        app = app.layer(SetResponseHeaderLayer::overriding(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        ));
+    }
 
     let bind: SocketAddr = "0.0.0.0:2286".parse().expect("valid bind addr");
     let listener = TcpListener::bind(bind)

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use argon2::{Argon2, PasswordHasher};
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Json, debug_handler};
@@ -99,8 +100,13 @@ async fn list_users_impl(state: &AppState) -> Result<Vec<UserRow>> {
 pub(crate) async fn create_user(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
+    if let Err(err) = crate::routes::auth::ensure_same_origin(&headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
         return StatusCode::FORBIDDEN.into_response();
     };
@@ -170,9 +176,14 @@ async fn create_user_impl(state: &AppState, req: CreateUserRequest) -> Result<Us
 pub(crate) async fn update_user(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(req): Json<UpdateUserRequest>,
 ) -> impl IntoResponse {
+    if let Err(err) = crate::routes::auth::ensure_same_origin(&headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
         return StatusCode::FORBIDDEN.into_response();
     };
@@ -287,8 +298,13 @@ async fn update_user_impl(state: &AppState, id: i64, req: UpdateUserRequest) -> 
 pub(crate) async fn delete_user(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    if let Err(err) = crate::routes::auth::ensure_same_origin(&headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
         return StatusCode::FORBIDDEN.into_response();
     };

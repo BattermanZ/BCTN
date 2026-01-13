@@ -1,8 +1,10 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Row, Sqlite};
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -10,6 +12,7 @@ pub(crate) struct AppState {
     pub(crate) names_db: Pool<Sqlite>,
     pub(crate) country_total_births: CountryTotals,
     pub(crate) cookie_secure: bool,
+    pub(crate) login_limiter: Arc<LoginLimiter>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -17,6 +20,32 @@ pub(crate) struct CountryTotals {
     pub(crate) us_total: i64,
     pub(crate) fr_total: i64,
     pub(crate) cl_total: i64,
+}
+
+#[derive(Debug)]
+pub(crate) struct LoginLimiter {
+    inner: Mutex<std::collections::HashMap<String, Vec<i64>>>,
+    max_attempts: usize,
+    window_seconds: i64,
+}
+
+impl LoginLimiter {
+    pub(crate) fn new(max_attempts: usize, window_seconds: i64) -> Self {
+        Self {
+            inner: Mutex::new(std::collections::HashMap::new()),
+            max_attempts,
+            window_seconds,
+        }
+    }
+
+    pub(crate) async fn record_and_is_limited(&self, key: &str, now: i64) -> bool {
+        let mut m = self.inner.lock().await;
+        let cutoff = now - self.window_seconds;
+        let v = m.entry(key.to_string()).or_default();
+        v.retain(|ts| *ts >= cutoff);
+        v.push(now);
+        v.len() > self.max_attempts
+    }
 }
 
 impl AppState {
@@ -51,6 +80,7 @@ impl AppState {
             names_db,
             country_total_births,
             cookie_secure,
+            login_limiter: Arc::new(LoginLimiter::new(20, 10 * 60)),
         })
     }
 
