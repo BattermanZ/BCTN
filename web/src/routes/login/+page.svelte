@@ -26,6 +26,8 @@
         bestPickMode: s.best_pick_mode,
       });
 
+      // Prevent iOS Safari "input focus zoom" from persisting after navigation.
+      (document.activeElement as HTMLElement | null)?.blur?.();
       await goto('/');
     } catch (e) {
       const msg = (e as Error | null)?.message ?? 'Login failed';
@@ -50,7 +52,7 @@
     <label class="block">
       <div class="text-xs font-semibold text-zinc-500">Username</div>
       <input
-        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm"
+        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-base text-zinc-800 shadow-sm"
         autocomplete="username"
         value={username}
         oninput={(e) => (username = (e.currentTarget as HTMLInputElement).value)}
@@ -60,7 +62,7 @@
     <label class="block">
       <div class="text-xs font-semibold text-zinc-500">Password</div>
       <input
-        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm"
+        class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-base text-zinc-800 shadow-sm"
         type="password"
         autocomplete="current-password"
         value={password}

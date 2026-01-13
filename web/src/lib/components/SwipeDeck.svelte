@@ -252,6 +252,8 @@
     if (dragging) return;
     if (animating) return;
     if (flipped) return;
+    // iOS Safari PWA can scroll the page unless we actively suppress default touch behavior.
+    if (e.cancelable) e.preventDefault();
     dragging = true;
     activePointerId = e.pointerId;
     startX = e.clientX;
@@ -265,6 +267,7 @@
   function onPointerMove(e: PointerEvent) {
     if (!dragging) return;
     if (activePointerId !== e.pointerId) return;
+    if (e.cancelable) e.preventDefault();
     dx = e.clientX - startX;
     dy = e.clientY - startY;
 
@@ -275,6 +278,7 @@
   function onPointerUp(e: PointerEvent) {
     if (!dragging) return;
     if (activePointerId !== e.pointerId) return;
+    if (e.cancelable) e.preventDefault();
 
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
@@ -300,6 +304,11 @@
   function onPointerCancel(e: PointerEvent) {
     if (activePointerId !== e.pointerId) return;
     resetDrag();
+  }
+
+  function onTouchMove(e: TouchEvent) {
+    if (flipped) return;
+    if (e.cancelable) e.preventDefault();
   }
 
   function swipeLabel(): { label: string; tone: 'neutral' | 'teal' | 'rose' | 'amber' } {
@@ -579,6 +588,7 @@
           onpointermove={onPointerMove}
           onpointerup={onPointerUp}
           onpointercancel={onPointerCancel}
+          ontouchmove={onTouchMove}
           onkeydown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
