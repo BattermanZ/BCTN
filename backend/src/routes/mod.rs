@@ -12,9 +12,46 @@ mod tests;
 
 use crate::state::AppState;
 use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
+fn normalize_host(host: &str) -> String {
+    let host = host.split(',').next().unwrap_or(host).trim().to_lowercase();
+    if host.starts_with('[') {
+        return host;
+    }
+    host.split(':').next().unwrap_or(&host).to_string()
+}
+
+async fn host_guard(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+    let Some(allowed) = state.public_host.as_deref() else {
+        return next.run(req).await;
+    };
+
+    let headers = req.headers();
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok())
+        .map(normalize_host);
+
+    let Some(host) = host else {
+        return StatusCode::MISDIRECTED_REQUEST.into_response();
+    };
+
+    if host != allowed {
+        return StatusCode::MISDIRECTED_REQUEST.into_response();
+    }
+
+    next.run(req).await
+}
+
 pub(crate) fn router(state: AppState) -> Router {
+    let guard_state = state.clone();
     Router::new()
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/auth/login", post(auth::login))
@@ -43,4 +80,5 @@ pub(crate) fn router(state: AppState) -> Router {
             axum::routing::patch(admin::update_user).delete(admin::delete_user),
         )
         .with_state(state)
+        .layer(middleware::from_fn_with_state(guard_state, host_guard))
 }

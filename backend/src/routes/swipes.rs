@@ -73,7 +73,7 @@ pub(crate) async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateSwipeRequest>,
 ) -> impl IntoResponse {
-    if let Err(err) = super::auth::ensure_same_origin(&headers) {
+    if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
         tracing::warn!(error=%err, "csrf_blocked");
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -174,7 +174,7 @@ pub(crate) async fn undo(
     jar: CookieJar,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(err) = super::auth::ensure_same_origin(&headers) {
+    if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
         tracing::warn!(error=%err, "csrf_blocked");
         return StatusCode::FORBIDDEN.into_response();
     }

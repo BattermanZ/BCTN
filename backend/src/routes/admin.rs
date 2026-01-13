@@ -103,7 +103,7 @@ pub(crate) async fn create_user(
     headers: HeaderMap,
     Json(req): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
-    if let Err(err) = crate::routes::auth::ensure_same_origin(&headers) {
+    if let Err(err) = crate::routes::auth::ensure_same_origin(&state, &headers) {
         tracing::warn!(error=%err, "csrf_blocked");
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -180,7 +180,7 @@ pub(crate) async fn update_user(
     Path(id): Path<i64>,
     Json(req): Json<UpdateUserRequest>,
 ) -> impl IntoResponse {
-    if let Err(err) = crate::routes::auth::ensure_same_origin(&headers) {
+    if let Err(err) = crate::routes::auth::ensure_same_origin(&state, &headers) {
         tracing::warn!(error=%err, "csrf_blocked");
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -301,7 +301,7 @@ pub(crate) async fn delete_user(
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    if let Err(err) = crate::routes::auth::ensure_same_origin(&headers) {
+    if let Err(err) = crate::routes::auth::ensure_same_origin(&state, &headers) {
         tracing::warn!(error=%err, "csrf_blocked");
         return StatusCode::FORBIDDEN.into_response();
     }

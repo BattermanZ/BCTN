@@ -53,7 +53,7 @@ async fn bootstrap_then_login_then_me_and_admin_list_users() {
     let names_db_path = dir.path().join("names.sqlite");
     create_min_names_db(&names_db_path).await;
 
-    let state = AppState::new(&db_path, &names_db_path, false)
+    let state = AppState::new(&db_path, &names_db_path, false, None)
         .await
         .unwrap();
     state.migrate().await.unwrap();

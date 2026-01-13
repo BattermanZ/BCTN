@@ -64,7 +64,7 @@ pub(crate) async fn patch_settings(
     headers: HeaderMap,
     Json(req): Json<PatchSettingsRequest>,
 ) -> impl IntoResponse {
-    if let Err(err) = super::auth::ensure_same_origin(&headers) {
+    if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
         tracing::warn!(error=%err, "csrf_blocked");
         return StatusCode::FORBIDDEN.into_response();
     }

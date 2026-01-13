@@ -13,6 +13,7 @@ pub(crate) struct AppState {
     pub(crate) country_total_births: CountryTotals,
     pub(crate) cookie_secure: bool,
     pub(crate) login_limiter: Arc<LoginLimiter>,
+    pub(crate) public_host: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,7 +50,12 @@ impl LoginLimiter {
 }
 
 impl AppState {
-    pub(crate) async fn new(app_db: &Path, names_db: &Path, cookie_secure: bool) -> Result<Self> {
+    pub(crate) async fn new(
+        app_db: &Path,
+        names_db: &Path,
+        cookie_secure: bool,
+        public_host: Option<String>,
+    ) -> Result<Self> {
         let opts = SqliteConnectOptions::new()
             .filename(app_db)
             .create_if_missing(true)
@@ -81,6 +87,9 @@ impl AppState {
             country_total_births,
             cookie_secure,
             login_limiter: Arc::new(LoginLimiter::new(20, 10 * 60)),
+            public_host: public_host
+                .map(|h| h.trim().to_lowercase())
+                .filter(|h| !h.is_empty()),
         })
     }
 

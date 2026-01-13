@@ -77,7 +77,23 @@ fn client_id_from_headers(headers: &HeaderMap) -> String {
     "unknown".to_string()
 }
 
-pub(crate) fn ensure_same_origin(headers: &HeaderMap) -> Result<()> {
+fn normalize_host(host: &str) -> String {
+    let host = host.split(',').next().unwrap_or(host).trim().to_lowercase();
+    if host.starts_with('[') {
+        return host;
+    }
+    host.split(':').next().unwrap_or(&host).to_string()
+}
+
+fn request_host(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok())
+        .map(normalize_host)
+}
+
+pub(crate) fn ensure_same_origin(state: &AppState, headers: &HeaderMap) -> Result<()> {
     // Simple CSRF mitigation: if the browser sends an Origin header, require it matches the Host.
     // Reverse proxies typically preserve Origin, and this blocks cross-site POST/PATCH/DELETE.
     let origin = headers
@@ -97,16 +113,18 @@ pub(crate) fn ensure_same_origin(headers: &HeaderMap) -> Result<()> {
         .unwrap_or("")
         .to_lowercase();
 
-    let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get("host"))
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-
+    let host = request_host(headers).unwrap_or_default();
     if origin_host.is_empty() || host.is_empty() {
         anyhow::bail!("invalid origin");
+    }
+    if let Some(allowed) = state.public_host.as_deref() {
+        if host != allowed {
+            anyhow::bail!("invalid host");
+        }
+        if origin_host != allowed {
+            anyhow::bail!("cross-origin request blocked");
+        }
+        return Ok(());
     }
     if origin_host != host {
         anyhow::bail!("cross-origin request blocked");
@@ -325,7 +343,7 @@ pub(crate) async fn logout(
     jar: CookieJar,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if ensure_same_origin(&headers).is_err() {
+    if ensure_same_origin(&state, &headers).is_err() {
         return StatusCode::FORBIDDEN.into_response();
     }
     let Some(token) = jar.get(SESSION_COOKIE).map(|c| c.value().to_string()) else {
@@ -397,7 +415,7 @@ pub(crate) async fn change_password(
     headers: HeaderMap,
     Json(req): Json<ChangePasswordRequest>,
 ) -> impl IntoResponse {
-    if let Err(err) = ensure_same_origin(&headers) {
+    if let Err(err) = ensure_same_origin(&state, &headers) {
         tracing::warn!(error=%err, "csrf_blocked");
         return StatusCode::FORBIDDEN.into_response();
     }

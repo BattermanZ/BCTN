@@ -38,6 +38,10 @@ struct Args {
     #[arg(long, env = "BCTN_COOKIE_SECURE", default_value_t = false)]
     cookie_secure: bool,
 
+    /// Optional public host allowlist (e.g. `bctn.example.com`); rejects other Host values.
+    #[arg(long, env = "BCTN_PUBLIC_HOST")]
+    public_host: Option<String>,
+
     /// Bootstrap the first admin user if the DB has no users (exits after running).
     #[arg(long, env = "BCTN_BOOTSTRAP_ADMIN_USERNAME")]
     bootstrap_admin_username: Option<String>,
@@ -63,7 +67,13 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("create dir {parent:?}"))?;
 
-    let state = AppState::new(&args.app_db, &args.names_db, args.cookie_secure).await?;
+    let state = AppState::new(
+        &args.app_db,
+        &args.names_db,
+        args.cookie_secure,
+        args.public_host,
+    )
+    .await?;
     state.migrate().await?;
 
     if args.bootstrap_admin_username.is_some() || args.bootstrap_admin_password.is_some() {
