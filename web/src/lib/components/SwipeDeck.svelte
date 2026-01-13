@@ -306,9 +306,27 @@
     resetDrag();
   }
 
-  function onTouchMove(e: TouchEvent) {
-    if (flipped) return;
-    if (e.cancelable) e.preventDefault();
+  function suppressTouchScroll(node: HTMLElement) {
+    const onTouchStart = (e: TouchEvent) => {
+      if (flipped) return;
+      if (animating) return;
+      if (e.cancelable) e.preventDefault();
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (flipped) return;
+      if (e.cancelable) e.preventDefault();
+    };
+
+    node.addEventListener('touchstart', onTouchStart, { passive: false });
+    node.addEventListener('touchmove', onTouchMove, { passive: false });
+
+    return {
+      destroy() {
+        node.removeEventListener('touchstart', onTouchStart);
+        node.removeEventListener('touchmove', onTouchMove);
+      },
+    };
   }
 
   function swipeLabel(): { label: string; tone: 'neutral' | 'teal' | 'rose' | 'amber' } {
@@ -584,11 +602,11 @@
         <div
           class="absolute inset-0 z-20 origin-center touch-none"
           style={`transform: translate3d(${topX}px, ${topY}px, 0) rotate(${topRotate}deg);`}
+          use:suppressTouchScroll
           onpointerdown={onPointerDown}
           onpointermove={onPointerMove}
           onpointerup={onPointerUp}
           onpointercancel={onPointerCancel}
-          ontouchmove={onTouchMove}
           onkeydown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
