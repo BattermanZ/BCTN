@@ -504,7 +504,9 @@
   function maybeFlipBack(e: MouseEvent) {
     const target = e.target as HTMLElement | null;
     if (!target) return;
-    if (target.closest('button,a,input,select,textarea,[role="button"]')) return;
+    const currentTarget = e.currentTarget as HTMLElement | null;
+    const interactive = target.closest('button,a,input,select,textarea,[role="button"]');
+    if (interactive && interactive !== currentTarget) return;
     flipped = false;
     showAllSpellings = false;
   }
