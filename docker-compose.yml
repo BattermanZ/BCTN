@@ -13,5 +13,6 @@ services:
       BCTN_APP_DB: /data/bctn_app.sqlite
       BCTN_NAMES_DB: /app/data/bctn.sqlite
       BCTN_STATIC_DIR: /app/web/build
-    # Ensure the bind-mounted SQLite file is writable on Linux without chmod/chown.
-    user: "${UID:-1000}:${GID:-1000}"
+    # Run as the host user (typical Linux desktop/server default).
+    # Ensure the host `./data` directory is writable by uid/gid 1000, or SQLite will fail to create/open the DB.
+    user: "1000:1000"
