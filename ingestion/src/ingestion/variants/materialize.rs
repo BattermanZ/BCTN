@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail};
@@ -48,14 +49,53 @@ impl Dsu {
     }
 }
 
+fn apply_materialize_pragmas(conn: &Connection) {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(8) as i64;
+
+    if let Err(e) = conn.pragma_update(None, "threads", threads) {
+        eprintln!("materialize_pragma_failed\tname=threads\terror={e}");
+    } else {
+        eprintln!("materialize_pragma\tname=threads\tvalue={threads}");
+    }
+
+    if let Err(e) = conn.pragma_update(None, "temp_store", "MEMORY") {
+        eprintln!("materialize_pragma_failed\tname=temp_store\terror={e}");
+    } else {
+        eprintln!("materialize_pragma\tname=temp_store\tvalue=MEMORY");
+    }
+
+    // Negative cache_size is interpreted as KiB.
+    let cache_kib: i64 = -65_536; // ~64MB
+    if let Err(e) = conn.pragma_update(None, "cache_size", cache_kib) {
+        eprintln!("materialize_pragma_failed\tname=cache_size\terror={e}");
+    } else {
+        eprintln!(
+            "materialize_pragma\tname=cache_size\tvalue_kib={}",
+            -cache_kib
+        );
+    }
+}
+
+fn count_rows(conn: &Connection, table: &str) -> Result<i64> {
+    let mut stmt = conn.prepare(&format!("SELECT COUNT(*) FROM {table}"))?;
+    let count: i64 = stmt.query_row([], |r| r.get(0))?;
+    Ok(count)
+}
+
 pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
     let mut conn = db::open_rw_with_schema(&args.db)?;
     db::ensure_indexes(&conn)?;
+    apply_materialize_pragmas(&conn);
 
     let tx = conn.transaction()?;
 
     let run_id: i64 = tx.query_row("SELECT MAX(id) FROM import_run", [], |r| r.get(0))?;
+    eprintln!("materialize_start\trun_id={run_id}");
 
+    let clear_started = Instant::now();
     tx.execute_batch(
         r#"
         DELETE FROM variant_group_country_top100_any;
@@ -70,14 +110,59 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
         DELETE FROM card_spelling_country_total;
         "#,
     )?;
+    eprintln!(
+        "materialize_step\taction=clear_tables\telapsed_ms={}",
+        clear_started.elapsed().as_millis()
+    );
 
+    let started = Instant::now();
     materialize_groups(&tx)?;
-    materialize_concept_stats(&tx)?;
-    materialize_group_stats(&tx)?;
-    materialize_card_spellings(&tx, run_id)?;
-    materialize_card_ranks(&tx, run_id)?;
+    eprintln!(
+        "materialize_step\taction=groups\telapsed_ms={}\tgroups={}\tmembers={}",
+        started.elapsed().as_millis(),
+        count_rows(&tx, "variant_group")?,
+        count_rows(&tx, "variant_group_member")?
+    );
 
+    let started = Instant::now();
+    materialize_concept_stats(&tx)?;
+    eprintln!(
+        "materialize_step\taction=concept_stats\telapsed_ms={}\trows={}",
+        started.elapsed().as_millis(),
+        count_rows(&tx, "concept_country_window_total")?
+    );
+
+    let started = Instant::now();
+    materialize_group_stats(&tx)?;
+    eprintln!(
+        "materialize_step\taction=group_stats\telapsed_ms={}\trows={}",
+        started.elapsed().as_millis(),
+        count_rows(&tx, "variant_group_country_window_total")?
+    );
+
+    let started = Instant::now();
+    materialize_card_spellings(&tx, run_id)?;
+    eprintln!(
+        "materialize_step\taction=card_spellings\telapsed_ms={}\tspellings={}\tsubset_top={}",
+        started.elapsed().as_millis(),
+        count_rows(&tx, "card_spelling_total_all")?,
+        count_rows(&tx, "card_spelling_subset_top")?
+    );
+
+    let started = Instant::now();
+    materialize_card_ranks(&tx, run_id)?;
+    eprintln!(
+        "materialize_step\taction=card_ranks\telapsed_ms={}\tranks={}",
+        started.elapsed().as_millis(),
+        count_rows(&tx, "card_rank_last5")?
+    );
+
+    let commit_started = Instant::now();
     tx.commit()?;
+    eprintln!(
+        "materialize_done\trun_id={run_id}\telapsed_ms={}",
+        commit_started.elapsed().as_millis()
+    );
     Ok(())
 }
 
