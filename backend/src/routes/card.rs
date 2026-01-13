@@ -46,6 +46,7 @@ pub(crate) struct SexSplit {
 pub(crate) struct RankPoint {
     year: i64,
     rank: i64,
+    total: i64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -599,7 +600,7 @@ async fn last5_year_ranks_materialized(
 ) -> Result<BTreeMap<String, Vec<RankPoint>>> {
     let rows = sqlx::query(
         r#"
-        SELECT country, year, rank
+        SELECT country, year, rank, total
         FROM card_rank_last5
         WHERE card_kind = ?1 AND card_key = ?2
         ORDER BY country ASC, year ASC
@@ -616,9 +617,10 @@ async fn last5_year_ranks_materialized(
         let country: String = r.try_get("country")?;
         let year: i64 = r.try_get("year")?;
         let rank: i64 = r.try_get("rank")?;
+        let total: i64 = r.try_get("total")?;
         out.entry(country)
             .or_default()
-            .push(RankPoint { year, rank });
+            .push(RankPoint { year, rank, total });
     }
     Ok(out)
 }

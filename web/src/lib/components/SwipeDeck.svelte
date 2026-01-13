@@ -24,6 +24,8 @@
   let spellingsHasMore = $state(false);
   let spellingsLoadingPage = $state(false);
 
+  let showRankCounts = $state(false);
+
   let dragging = $state(false);
   let activePointerId = $state<number | null>(null);
   let startX = $state(0);
@@ -532,10 +534,11 @@
     return topCard?.last5_years?.[country] ?? [];
   }
 
-  function rankByYearFor(country: CountryCode): Record<string, number> {
-    const m: Record<string, number> = {};
+  type RankInfo = { rank: number; total?: number };
+  function rankByYearFor(country: CountryCode): Record<string, RankInfo> {
+    const m: Record<string, RankInfo> = {};
     for (const r of topCard?.last5_year_ranks?.[country] ?? []) {
-      m[String(r.year)] = r.rank;
+      m[String(r.year)] = { rank: r.rank, total: r.total };
     }
     return m;
   }
@@ -822,7 +825,20 @@
                     </section>
 
                     <section class="rounded-2xl border border-zinc-200 bg-white/80 p-4">
-                      <div class="text-sm font-semibold text-zinc-900">Rank (last 5 years)</div>
+                      <button
+                        type="button"
+                        class="w-full text-left"
+                        onclick={() => (showRankCounts = !showRankCounts)}
+                      >
+                        <div class="flex items-center justify-between gap-3">
+                          <div class="text-sm font-semibold text-zinc-900">
+                            {showRankCounts ? 'Occurrences (last 5 years)' : 'Rank (last 5 years)'}
+                          </div>
+                          <div class="text-xs font-semibold text-indigo-600">
+                            {showRankCounts ? 'Show ranks' : 'Show counts'}
+                          </div>
+                        </div>
+                      </button>
                       {#if detailsLoading && !topCard.last5_year_ranks}
                         <div class="mt-2 text-sm text-zinc-600">Fetching ranks…</div>
                       {:else if topCard.last5_years}
@@ -837,14 +853,23 @@
                                 </div>
                                 <div class="mt-2 grid grid-cols-5 gap-2 text-center text-[11px]">
                                   {#each years as year (year)}
-                                    {@const rank = byYear[String(year)]}
+                                    {@const info = byYear[String(year)]}
                                     <div class="rounded-xl border border-zinc-200 bg-white p-2">
                                       <div class="text-zinc-500">{year}</div>
                                       <div class="mt-1 font-semibold">
-                                        {rank !== undefined ? `#${rank}` : '—'}
+                                        {#if showRankCounts}
+                                          {info?.total !== undefined
+                                            ? new Intl.NumberFormat().format(info.total)
+                                            : '—'}
+                                        {:else}
+                                          {info?.rank !== undefined ? `#${info.rank}` : '—'}
+                                        {/if}
                                       </div>
                                     </div>
                                   {/each}
+                                </div>
+                                <div class="mt-2 text-[11px] text-zinc-400">
+                                  Tap to toggle ranks ↔ counts
                                 </div>
                               </div>
                             {/if}
