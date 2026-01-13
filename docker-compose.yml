@@ -1,0 +1,17 @@
+services:
+  bctn:
+    image: 192.168.31.233:5000/bctn:latest
+    container_name: BCTN
+    restart: unless-stopped
+    ports:
+      - "2286:2286"
+    # Bind-mount app state DB only (sessions/swipes/matches).
+    # The names DB is baked into the image at /app/data/bctn.sqlite.
+    volumes:
+      - ./data:/data
+    environment:
+      BCTN_APP_DB: /data/bctn_app.sqlite
+      BCTN_NAMES_DB: /app/data/bctn.sqlite
+      BCTN_STATIC_DIR: /app/web/build
+    # Ensure the bind-mounted SQLite file is writable on Linux without chmod/chown.
+    user: "${UID:-1000}:${GID:-1000}"

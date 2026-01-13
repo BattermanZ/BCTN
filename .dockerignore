@@ -1,0 +1,25 @@
+# VCS / editor
+.git
+.github
+.vscode
+.idea
+
+# Local env / secrets
+.env
+
+# Rust build output
+target
+**/target
+
+# Node build output
+**/node_modules
+web/.svelte-kit
+web/build
+
+# App data (bind-mounted at runtime); keep only the names DB for image bake.
+data/*
+!data/bctn.sqlite
+
+# Misc
+*.log
+**/*.bak
