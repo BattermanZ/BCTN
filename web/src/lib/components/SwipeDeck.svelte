@@ -28,6 +28,7 @@
   const topCard = $derived(deck[0]);
   const midCard = $derived(deck[1]);
   const backCard = $derived(deck[2]);
+  const targetDeckSize = 10;
 
   type MoveSample = { t: number; dx: number; dy: number };
   let samples = $state<MoveSample[]>([]);
@@ -58,16 +59,21 @@
     loading = true;
     const gen = feedGen;
     try {
-      while (deck.length < 3) {
+      while (deck.length < targetDeckSize) {
         if (gen != feedGen) return;
-        const next = await api.feedNext({
+        const missing = targetDeckSize - deck.length;
+        const batch = await api.feedBatch({
           countries: $filters.countries.join(','),
           pop: $filters.popularity,
           include_extra_rare: $filters.includeExtraRare,
           gender: $filters.gender,
+          limit: Math.min(10, missing),
         });
         if (gen != feedGen) return;
-        deck = [...deck, next];
+        if (!batch.length) {
+          break;
+        }
+        deck = [...deck, ...batch];
       }
     } catch (e) {
       if (gen != feedGen) return;
@@ -108,7 +114,11 @@
     if (card.all_spellings && card.last5_year_ranks) return;
     detailsLoading = true;
     try {
-      const full = await api.cardDetails(card.card_key);
+      const full = await api.cardDetails(card.card_key, {
+        countries: $filters.countries.join(','),
+        page: 0,
+        page_size: 200,
+      });
       if (deck[0]?.card_key === card.card_key) {
         deck = [full, ...deck.slice(1)];
       }

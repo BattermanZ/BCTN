@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Json, debug_handler};
@@ -36,6 +36,18 @@ pub(crate) struct CountrySummary {
 pub(crate) struct RankPoint {
     year: i64,
     rank: i64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct CardQuery {
+    /// Comma-separated list of evidence countries (subset of US,FR,CL).
+    countries: Option<String>,
+
+    /// Page of spellings to return (0-based).
+    page: Option<i64>,
+
+    /// Page size for spellings (clamped to 1..=500).
+    page_size: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -215,78 +227,31 @@ async fn within_concept_variants(state: &AppState, concept_key: &str) -> Result<
     Ok(rows.into_iter().filter(|s| s != &preferred).collect())
 }
 
-async fn all_spellings_for_concept(
+async fn all_spellings_materialized(
     state: &AppState,
-    concept_key: &str,
-    limit: i64,
+    kind: CardKind,
+    card_key: &str,
+    page: i64,
+    page_size: i64,
 ) -> Result<Vec<String>> {
-    let run_id = state.names_window.run_id;
+    let limit = page_size.clamp(1, 500);
+    let offset = page.saturating_mul(limit).max(0);
     let rows: Vec<String> = sqlx::query_scalar(
         r#"
-        SELECT ns.display
-        FROM name_concept nc
-        JOIN name_concept_member ncm ON ncm.concept_id = nc.id
-        JOIN name_string ns ON ns.id = ncm.name_string_id
-        LEFT JOIN (
-          SELECT name_string_id, SUM(count) AS total
-          FROM name_observation
-          WHERE run_id = ?2
-          GROUP BY name_string_id
-        ) obs ON obs.name_string_id = ns.id
-        WHERE nc.concept_key = ?1
-        ORDER BY COALESCE(obs.total, 0) DESC, ns.display ASC
-        LIMIT ?3
+        SELECT name_raw
+        FROM card_spelling_total_all
+        WHERE card_kind = ?1 AND card_key = ?2
+        ORDER BY total DESC, name_raw ASC
+        LIMIT ?3 OFFSET ?4
         "#,
     )
-    .bind(concept_key)
-    .bind(run_id)
+    .bind(kind.as_str())
+    .bind(card_key)
     .bind(limit)
+    .bind(offset)
     .fetch_all(&state.names_db)
     .await
-    .context("load all spellings for concept")?;
-    Ok(rows)
-}
-
-async fn all_spellings_for_group(
-    state: &AppState,
-    group_key: &str,
-    limit: i64,
-) -> Result<Vec<String>> {
-    let run_id = state.names_window.run_id;
-    let rows: Vec<String> = sqlx::query_scalar(
-        r#"
-        WITH members AS (
-          SELECT nc.id AS concept_id
-          FROM variant_group_member vgm
-          JOIN name_concept nc ON nc.concept_key = vgm.concept_key
-          WHERE vgm.variant_group_key = ?1
-        ),
-        strings AS (
-          SELECT DISTINCT ncm.name_string_id AS name_string_id
-          FROM members m
-          JOIN name_concept_member ncm ON ncm.concept_id = m.concept_id
-        ),
-        totals AS (
-          SELECT no.name_string_id AS name_string_id, SUM(no.count) AS total
-          FROM name_observation no
-          JOIN strings s ON s.name_string_id = no.name_string_id
-          WHERE no.run_id = ?2
-          GROUP BY no.name_string_id
-        )
-        SELECT ns.display
-        FROM strings s
-        JOIN name_string ns ON ns.id = s.name_string_id
-        LEFT JOIN totals t ON t.name_string_id = s.name_string_id
-        ORDER BY COALESCE(t.total, 0) DESC, ns.display ASC
-        LIMIT ?3
-        "#,
-    )
-    .bind(group_key)
-    .bind(run_id)
-    .bind(limit)
-    .fetch_all(&state.names_db)
-    .await
-    .context("load all spellings for group")?;
+    .context("load all spellings (materialized)")?;
     Ok(rows)
 }
 
@@ -401,167 +366,155 @@ async fn best_pick_mode(state: &AppState, user_id: i64) -> Result<bool> {
     Ok(best_pick_mode != 0)
 }
 
-async fn last_years(state: &AppState, country: &str, n: i64) -> Result<Vec<i64>> {
-    let run_id = state.names_window.run_id;
-    let rows: Vec<i64> = sqlx::query_scalar(
-        "SELECT DISTINCT year FROM name_observation WHERE run_id=?1 AND country=?2 ORDER BY year DESC LIMIT ?3",
+fn subset_key_for(countries: &[&str]) -> String {
+    let mut has_us = false;
+    let mut has_fr = false;
+    let mut has_cl = false;
+    for &c in countries {
+        match c {
+            "US" => has_us = true,
+            "FR" => has_fr = true,
+            "CL" => has_cl = true,
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if has_us {
+        parts.push("US");
+    }
+    if has_fr {
+        parts.push("FR");
+    }
+    if has_cl {
+        parts.push("CL");
+    }
+    parts.join(",")
+}
+
+fn parse_countries(s: Option<String>) -> Result<Vec<&'static str>> {
+    let raw = s.unwrap_or_else(|| "US,FR,CL".to_string());
+    let mut out = Vec::new();
+    for part in raw.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+        match part {
+            "US" => out.push("US"),
+            "FR" => out.push("FR"),
+            "CL" => out.push("CL"),
+            other => anyhow::bail!("invalid country {other:?}; expected US,FR,CL"),
+        }
+    }
+    if out.is_empty() {
+        anyhow::bail!("countries must not be empty");
+    }
+    Ok(out)
+}
+
+async fn spellings_preview_materialized(
+    state: &AppState,
+    kind: CardKind,
+    card_key: &str,
+    selected_countries: &[&'static str],
+) -> Result<Vec<String>> {
+    let subset_key = subset_key_for(selected_countries);
+    let mut subset_keys = Vec::<String>::new();
+    subset_keys.push(subset_key.clone());
+    for &c in selected_countries {
+        subset_keys.push(c.to_string());
+    }
+    subset_keys.sort();
+    subset_keys.dedup();
+
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "SELECT subset_key, name_raw, rank FROM card_spelling_subset_top WHERE card_kind = ",
+    );
+    qb.push_bind(kind.as_str());
+    qb.push(" AND card_key = ");
+    qb.push_bind(card_key);
+    qb.push(" AND subset_key IN (");
+    let mut sep = qb.separated(", ");
+    for k in &subset_keys {
+        sep.push_bind(k);
+    }
+    sep.push_unseparated(")");
+    qb.push(" ORDER BY subset_key ASC, rank ASC");
+
+    let rows = qb.build().fetch_all(&state.names_db).await?;
+    let mut by_subset: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for r in rows {
+        let sk: String = r.try_get("subset_key")?;
+        let name_raw: String = r.try_get("name_raw")?;
+        by_subset.entry(sk).or_default().push(name_raw);
+    }
+
+    let mut country_tops = Vec::<String>::new();
+    for &country in selected_countries {
+        if let Some(first) = by_subset.get(country).and_then(|v| v.first())
+            && !country_tops.contains(first)
+        {
+            country_tops.push(first.clone());
+        }
+    }
+
+    let subset_list = by_subset.get(&subset_key).cloned().unwrap_or_default();
+    if selected_countries.len() > 1 && country_tops.len() == 1 {
+        return Ok(subset_list.into_iter().take(3).collect());
+    }
+    if country_tops.len() >= 3 {
+        let mut out = country_tops;
+        out.truncate(3);
+        return Ok(out);
+    }
+
+    let mut out = country_tops;
+    for g in subset_list {
+        if out.len() >= 3 {
+            break;
+        }
+        if !out.contains(&g) {
+            out.push(g);
+        }
+    }
+    Ok(out)
+}
+
+async fn last5_year_ranks_materialized(
+    state: &AppState,
+    kind: CardKind,
+    card_key: &str,
+) -> Result<BTreeMap<String, Vec<RankPoint>>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT country, year, rank
+        FROM card_rank_last5
+        WHERE card_kind = ?1 AND card_key = ?2
+        ORDER BY country ASC, year ASC
+        "#,
     )
-    .bind(run_id)
-    .bind(country)
-    .bind(n)
+    .bind(kind.as_str())
+    .bind(card_key)
     .fetch_all(&state.names_db)
     .await
-    .context("load last years")?;
-    let mut years = rows;
-    years.sort();
-    Ok(years)
-}
+    .context("load card ranks (materialized)")?;
 
-async fn ranks_for_concept_years(
-    state: &AppState,
-    concept_id: i64,
-    country: &str,
-    years: &[i64],
-) -> Result<Vec<RankPoint>> {
-    if years.is_empty() {
-        return Ok(Vec::new());
+    let mut out = BTreeMap::<String, Vec<RankPoint>>::new();
+    for r in rows {
+        let country: String = r.try_get("country")?;
+        let year: i64 = r.try_get("year")?;
+        let rank: i64 = r.try_get("rank")?;
+        out.entry(country)
+            .or_default()
+            .push(RankPoint { year, rank });
     }
-    let run_id = state.names_window.run_id;
-
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        r#"
-        WITH concept_year AS (
-          SELECT
-            ncm.concept_id AS concept_id,
-            no.year AS year,
-            SUM(no.count) AS total
-          FROM name_observation no
-          JOIN name_concept_member ncm ON ncm.name_string_id = no.name_string_id
-          WHERE no.run_id =
-        "#,
-    );
-    qb.push_bind(run_id);
-    qb.push(" AND no.country = ");
-    qb.push_bind(country);
-    qb.push(" AND no.year IN (");
-    let mut separated = qb.separated(", ");
-    for y in years {
-        separated.push_bind(y);
-    }
-    separated.push_unseparated(")");
-    qb.push(
-        r#"
-          GROUP BY ncm.concept_id, no.year
-        ),
-        ranked AS (
-          SELECT
-            concept_id,
-            year,
-            total,
-            DENSE_RANK() OVER (PARTITION BY year ORDER BY total DESC) AS rnk
-          FROM concept_year
-        )
-        SELECT year, rnk
-        FROM ranked
-        WHERE concept_id =
-        "#,
-    );
-    qb.push_bind(concept_id);
-    qb.push(" ORDER BY year ASC");
-
-    let rows = qb.build().fetch_all(&state.names_db).await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| RankPoint {
-            year: r.try_get::<i64, _>("year").unwrap_or_default(),
-            rank: r.try_get::<i64, _>("rnk").unwrap_or_default(),
-        })
-        .collect())
-}
-
-async fn ranks_for_group_years(
-    state: &AppState,
-    group_key: &str,
-    country: &str,
-    years: &[i64],
-) -> Result<Vec<RankPoint>> {
-    if years.is_empty() {
-        return Ok(Vec::new());
-    }
-    let run_id = state.names_window.run_id;
-
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        r#"
-        WITH concept_year AS (
-          SELECT
-            ncm.concept_id AS concept_id,
-            no.year AS year,
-            SUM(no.count) AS total
-          FROM name_observation no
-          JOIN name_concept_member ncm ON ncm.name_string_id = no.name_string_id
-          WHERE no.run_id =
-        "#,
-    );
-    qb.push_bind(run_id);
-    qb.push(" AND no.country = ");
-    qb.push_bind(country);
-    qb.push(" AND no.year IN (");
-    let mut separated = qb.separated(", ");
-    for y in years {
-        separated.push_bind(y);
-    }
-    separated.push_unseparated(")");
-    qb.push(
-        r#"
-          GROUP BY ncm.concept_id, no.year
-        ),
-        group_year AS (
-          SELECT
-            vgm.variant_group_key AS group_key,
-            cy.year AS year,
-            SUM(cy.total) AS total
-          FROM concept_year cy
-          JOIN name_concept nc ON nc.id = cy.concept_id
-          JOIN variant_group_member vgm ON vgm.concept_key = nc.concept_key
-          GROUP BY vgm.variant_group_key, cy.year
-        ),
-        ranked AS (
-          SELECT
-            group_key,
-            year,
-            total,
-            DENSE_RANK() OVER (PARTITION BY year ORDER BY total DESC) AS rnk
-          FROM group_year
-        )
-        SELECT year, rnk
-        FROM ranked
-        WHERE group_key =
-        "#,
-    );
-    qb.push_bind(group_key);
-    qb.push(" ORDER BY year ASC");
-
-    let rows = qb.build().fetch_all(&state.names_db).await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| RankPoint {
-            year: r.try_get::<i64, _>("year").unwrap_or_default(),
-            rank: r.try_get::<i64, _>("rnk").unwrap_or_default(),
-        })
-        .collect())
-}
-
-fn preview_from_all(all: &[String]) -> Vec<String> {
-    all.iter().take(3).cloned().collect()
+    Ok(out)
 }
 
 #[debug_handler]
 pub(crate) async fn get(
     State(state): State<AppState>,
     jar: CookieJar,
+    Query(q): Query<CardQuery>,
     Path(card_key): Path<String>,
 ) -> impl IntoResponse {
-    match get_impl(&state, &jar, &card_key).await {
+    match get_impl(&state, &jar, &card_key, q).await {
         Ok(v) => Json(v).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "card_get_failed");
@@ -574,9 +527,11 @@ async fn get_impl(
     state: &AppState,
     jar: &CookieJar,
     card_key: &str,
+    q: CardQuery,
 ) -> Result<CardDetailsResponse> {
     let (user_id, _) = super::auth::require_session_user(state, jar).await?;
     let kind = detect_kind(state, card_key).await?;
+    let selected_countries = parse_countries(q.countries)?;
 
     let display_name = match kind {
         CardKind::Group => display_name_for_concept(state, card_key).await?,
@@ -618,30 +573,19 @@ async fn get_impl(
         None
     };
 
-    let all_spellings = match kind {
-        CardKind::Group => all_spellings_for_group(state, card_key, 200).await?,
-        CardKind::Concept => all_spellings_for_concept(state, card_key, 200).await?,
+    let page = q.page.unwrap_or(0).max(0);
+    let page_size = q.page_size.unwrap_or(200).clamp(1, 500);
+    let all_spellings = all_spellings_materialized(state, kind, card_key, page, page_size).await?;
+    let spellings_preview =
+        spellings_preview_materialized(state, kind, card_key, &selected_countries).await?;
+
+    let within_concept_variants = match kind {
+        CardKind::Concept => within_concept_variants(state, card_key)
+            .await
+            .unwrap_or_default(),
+        CardKind::Group => Vec::new(),
     };
-    let spellings_preview = preview_from_all(&all_spellings);
-
-    let within_concept_variants = within_concept_variants(state, card_key)
-        .await
-        .unwrap_or_default();
-
-    let mut last5_year_ranks = BTreeMap::<String, Vec<RankPoint>>::new();
-    for country in ["US", "FR", "CL"] {
-        let years = last_years(state, country, 5).await?;
-        let ranks = match kind {
-            CardKind::Group => ranks_for_group_years(state, card_key, country, &years).await?,
-            CardKind::Concept => {
-                let concept_id = concept_id_for_key(state, card_key).await?;
-                ranks_for_concept_years(state, concept_id, country, &years).await?
-            }
-        };
-        if !ranks.is_empty() {
-            last5_year_ranks.insert(country.to_string(), ranks);
-        }
-    }
+    let last5_year_ranks = last5_year_ranks_materialized(state, kind, card_key).await?;
 
     Ok(CardDetailsResponse {
         card_key: card_key.to_string(),

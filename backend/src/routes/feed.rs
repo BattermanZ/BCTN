@@ -7,6 +7,8 @@ use axum_extra::extract::CookieJar;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use crate::state::{AppState, CountryTotals};
@@ -26,6 +28,24 @@ pub(crate) struct FeedQuery {
     gender: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct FeedBatchQuery {
+    /// Comma-separated list of evidence countries (subset of US,FR,CL).
+    countries: Option<String>,
+
+    /// rare|common|top
+    pop: Option<String>,
+
+    /// Include extra-rare (<75 ppm) names.
+    include_extra_rare: Option<bool>,
+
+    /// unisex|mostly_male|mostly_female|male|female|any
+    gender: Option<String>,
+
+    /// Number of cards to return.
+    limit: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct FeedCardResponse {
     card_key: String,
@@ -34,6 +54,8 @@ pub(crate) struct FeedCardResponse {
     spellings_preview: Vec<String>,
     score: Option<i64>,
     per_country: Vec<CountrySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last5_year_ranks: Option<BTreeMap<String, Vec<RankPoint>>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +64,12 @@ pub(crate) struct CountrySummary {
     ppm: f64,
     top100_any: bool,
     gender: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RankPoint {
+    year: i64,
+    rank: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -269,6 +297,21 @@ pub(crate) async fn next(
     }
 }
 
+#[debug_handler]
+pub(crate) async fn batch(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Query(q): Query<FeedBatchQuery>,
+) -> impl IntoResponse {
+    match batch_impl(&state, &jar, q).await {
+        Ok(cards) => Json(cards).into_response(),
+        Err(err) => {
+            tracing::warn!(error=%err, "feed_batch_failed");
+            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+        }
+    }
+}
+
 async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<FeedCardResponse> {
     let (user_id, _) = super::auth::require_session_user(state, jar).await?;
     let selected_countries = parse_countries(q.countries)?;
@@ -361,11 +404,130 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
         candidates.choose(&mut rng).cloned().expect("non-empty")
     };
 
-    let preview = spellings_preview(
+    build_response(state, &chosen, &selected_countries, best_pick_mode != 0).await
+}
+
+async fn batch_impl(
+    state: &AppState,
+    jar: &CookieJar,
+    q: FeedBatchQuery,
+) -> Result<Vec<FeedCardResponse>> {
+    let (user_id, _) = super::auth::require_session_user(state, jar).await?;
+    let selected_countries = parse_countries(q.countries)?;
+    let pop = parse_pop(q.pop)?;
+    let gender = parse_gender(q.gender)?;
+    let include_extra_rare = q.include_extra_rare.unwrap_or(false);
+
+    let best_pick_mode: i64 =
+        sqlx::query_scalar("SELECT best_pick_mode FROM user_settings WHERE user_id = ?1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .context("load best_pick_mode")?
+            .unwrap_or(0);
+
+    let limit = q.limit.unwrap_or(10).clamp(1, 25);
+    let base_candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
+
+    let mut candidates = Vec::<CandidateCard>::new();
+    let mut candidate_limit = base_candidate_limit;
+    for _attempt in 0..4 {
+        candidates = load_candidates(state, user_id, candidate_limit).await?;
+        candidates.retain(|c| {
+            let totals = state.country_total_births;
+
+            let by_country = |country: &str| -> (f64, bool, &CountryStats) {
+                match country {
+                    "US" => (ppm(c.us.total, totals.us_total), c.us.top100_any, &c.us),
+                    "FR" => (ppm(c.fr.total, totals.fr_total), c.fr.top100_any, &c.fr),
+                    "CL" => (ppm(c.cl.total, totals.cl_total), c.cl.top100_any, &c.cl),
+                    _ => (0.0, false, &c.us),
+                }
+            };
+
+            let mut has_any = false;
+            let mut passes_any_pop = false;
+            let mut passes_any_gender = false;
+            let mut passes_any_non_extra = false;
+
+            for &country in &selected_countries {
+                let (p, top, stats) = by_country(country);
+                if stats.total > 0 {
+                    has_any = true;
+                }
+                if matches_pop(pop, p, top) {
+                    passes_any_pop = true;
+                }
+                if p >= 75.0 {
+                    passes_any_non_extra = true;
+                }
+                let gl = gender_label(stats.male, stats.female);
+                if matches_gender(gender, &gl) {
+                    passes_any_gender = true;
+                }
+            }
+
+            if !has_any {
+                return false;
+            }
+            if !include_extra_rare && !passes_any_non_extra {
+                return false;
+            }
+            if !passes_any_pop {
+                return false;
+            }
+            if !passes_any_gender {
+                return false;
+            }
+            true
+        });
+
+        if !candidates.is_empty() {
+            break;
+        }
+        candidate_limit = (candidate_limit * 3).min(200_000);
+    }
+
+    if candidates.is_empty() {
+        bail!("no matching names left (try broader filters)");
+    }
+
+    let chosen: Vec<CandidateCard> = if best_pick_mode != 0 {
+        let mut v = candidates;
+        v.sort_by_key(|c| {
+            Reverse(score_best_picks(
+                &state.country_total_births,
+                c.us,
+                c.fr,
+                c.cl,
+            ))
+        });
+        v.into_iter().take(limit as usize).collect()
+    } else {
+        let mut rng = rand::rngs::OsRng;
+        let mut v = candidates;
+        v.shuffle(&mut rng);
+        v.into_iter().take(limit as usize).collect()
+    };
+
+    let mut out = Vec::with_capacity(chosen.len());
+    for c in chosen {
+        out.push(build_response(state, &c, &selected_countries, best_pick_mode != 0).await?);
+    }
+    Ok(out)
+}
+
+async fn build_response(
+    state: &AppState,
+    chosen: &CandidateCard,
+    selected_countries: &[&'static str],
+    best_pick_mode: bool,
+) -> Result<FeedCardResponse> {
+    let preview = spellings_preview_materialized(
         state,
         chosen.card_kind,
         &chosen.card_key,
-        &selected_countries,
+        selected_countries,
     )
     .await?;
 
@@ -387,7 +549,7 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
         });
     }
 
-    let score = if best_pick_mode != 0 {
+    let score = if best_pick_mode {
         Some(score_best_picks(
             &state.country_total_births,
             chosen.us,
@@ -399,12 +561,15 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
     };
 
     Ok(FeedCardResponse {
-        card_key: chosen.card_key,
+        card_key: chosen.card_key.clone(),
         card_kind: chosen.card_kind.as_str().to_string(),
-        display_name: chosen.display_name,
+        display_name: chosen.display_name.clone(),
         spellings_preview: preview,
         score,
         per_country,
+        last5_year_ranks: Some(
+            last5_year_ranks_materialized(state, chosen.card_kind, &chosen.card_key).await?,
+        ),
     })
 }
 
@@ -535,189 +700,132 @@ async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<V
     Ok(out)
 }
 
-async fn spellings_preview(
+fn subset_key_for(countries: &[&str]) -> String {
+    let mut has_us = false;
+    let mut has_fr = false;
+    let mut has_cl = false;
+    for &c in countries {
+        match c {
+            "US" => has_us = true,
+            "FR" => has_fr = true,
+            "CL" => has_cl = true,
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if has_us {
+        parts.push("US");
+    }
+    if has_fr {
+        parts.push("FR");
+    }
+    if has_cl {
+        parts.push("CL");
+    }
+    parts.join(",")
+}
+
+async fn spellings_preview_materialized(
     state: &AppState,
     kind: CardKind,
     card_key: &str,
     selected_countries: &[&'static str],
 ) -> Result<Vec<String>> {
-    async fn global_top_n(
-        state: &AppState,
-        kind: CardKind,
-        card_key: &str,
-        run_id: i64,
-        countries: &[&str],
-        n: i64,
-    ) -> Result<Vec<String>> {
-        let placeholders = countries.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = match kind {
-            CardKind::Concept => format!(
-                r#"
-                SELECT no.name_raw AS name_raw
-                FROM name_concept nc
-                JOIN name_concept_member ncm ON ncm.concept_id = nc.id
-                JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                WHERE nc.concept_key = ?
-                  AND no.run_id = ?
-                  AND no.country IN ({placeholders})
-                GROUP BY no.name_raw
-                ORDER BY SUM(no.count) DESC
-                LIMIT ?
-                "#
-            ),
-            CardKind::Group => format!(
-                r#"
-                WITH concept_ids AS (
-                  SELECT nc.id AS id
-                  FROM variant_group_member vgm
-                  JOIN name_concept nc ON nc.concept_key = vgm.concept_key
-                  WHERE vgm.variant_group_key = ?
-                )
-                SELECT no.name_raw AS name_raw
-                FROM name_concept_member ncm
-                JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                WHERE ncm.concept_id IN (SELECT id FROM concept_ids)
-                  AND no.run_id = ?
-                  AND no.country IN ({placeholders})
-                GROUP BY no.name_raw
-                ORDER BY SUM(no.count) DESC
-                LIMIT ?
-                "#
-            ),
-        };
+    let subset_key = subset_key_for(selected_countries);
+    let mut subset_keys = Vec::<String>::new();
+    subset_keys.push(subset_key.clone());
+    for &c in selected_countries {
+        subset_keys.push(c.to_string());
+    }
+    subset_keys.sort();
+    subset_keys.dedup();
 
-        let mut q = sqlx::query_scalar::<_, String>(&sql)
-            .bind(card_key)
-            .bind(run_id);
-        for c in countries {
-            q = q.bind(*c);
-        }
-        let out = q
-            .bind(n)
-            .fetch_all(&state.names_db)
-            .await
-            .with_context(|| {
-                format!("spellings global top n kind={:?} card_key={card_key}", kind)
-            })?;
-        Ok(out)
+    let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+        "SELECT subset_key, name_raw, rank FROM card_spelling_subset_top WHERE card_kind = ",
+    );
+    qb.push_bind(kind.as_str());
+    qb.push(" AND card_key = ");
+    qb.push_bind(card_key);
+    qb.push(" AND subset_key IN (");
+    let mut sep = qb.separated(", ");
+    for k in &subset_keys {
+        sep.push_bind(k);
+    }
+    sep.push_unseparated(")");
+    qb.push(" ORDER BY subset_key ASC, rank ASC");
+
+    let rows = qb
+        .build()
+        .fetch_all(&state.names_db)
+        .await
+        .context("load spellings subset top")?;
+
+    let mut by_subset: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for r in rows {
+        let sk: String = r.try_get("subset_key")?;
+        let name_raw: String = r.try_get("name_raw")?;
+        by_subset.entry(sk).or_default().push(name_raw);
     }
 
-    async fn top1_per_country(
-        state: &AppState,
-        kind: CardKind,
-        card_key: &str,
-        run_id: i64,
-        countries: &[&str],
-    ) -> Result<Vec<(String, String)>> {
-        let placeholders = countries.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = match kind {
-            CardKind::Concept => format!(
-                r#"
-                WITH spellings AS (
-                  SELECT
-                    no.country AS country,
-                    no.name_raw AS name_raw,
-                    SUM(no.count) AS total
-                  FROM name_concept nc
-                  JOIN name_concept_member ncm ON ncm.concept_id = nc.id
-                  JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                  WHERE nc.concept_key = ?
-                    AND no.run_id = ?
-                    AND no.country IN ({placeholders})
-                  GROUP BY no.country, no.name_raw
-                ),
-                ranked AS (
-                  SELECT
-                    country,
-                    name_raw,
-                    total,
-                    ROW_NUMBER() OVER (PARTITION BY country ORDER BY total DESC, name_raw ASC) AS rn
-                  FROM spellings
-                )
-                SELECT country, name_raw FROM ranked WHERE rn = 1
-                "#
-            ),
-            CardKind::Group => format!(
-                r#"
-                WITH concept_ids AS (
-                  SELECT nc.id AS id
-                  FROM variant_group_member vgm
-                  JOIN name_concept nc ON nc.concept_key = vgm.concept_key
-                  WHERE vgm.variant_group_key = ?
-                ),
-                spellings AS (
-                  SELECT
-                    no.country AS country,
-                    no.name_raw AS name_raw,
-                    SUM(no.count) AS total
-                  FROM name_concept_member ncm
-                  JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-                  WHERE ncm.concept_id IN (SELECT id FROM concept_ids)
-                    AND no.run_id = ?
-                    AND no.country IN ({placeholders})
-                  GROUP BY no.country, no.name_raw
-                ),
-                ranked AS (
-                  SELECT
-                    country,
-                    name_raw,
-                    total,
-                    ROW_NUMBER() OVER (PARTITION BY country ORDER BY total DESC, name_raw ASC) AS rn
-                  FROM spellings
-                )
-                SELECT country, name_raw FROM ranked WHERE rn = 1
-                "#
-            ),
-        };
-
-        let mut q = sqlx::query(&sql).bind(card_key).bind(run_id);
-        for c in countries {
-            q = q.bind(*c);
-        }
-        let rows = q.fetch_all(&state.names_db).await.with_context(|| {
-            format!(
-                "spellings top1 per country kind={:?} card_key={card_key}",
-                kind
-            )
-        })?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push((
-                r.try_get::<String, _>("country")?,
-                r.try_get::<String, _>("name_raw")?,
-            ));
-        }
-        Ok(out)
-    }
-
-    let run_id = state.names_window.run_id;
-
-    let mut country_tops = Vec::new();
-    let top1s = top1_per_country(state, kind, card_key, run_id, selected_countries).await?;
-    for (_country, name_raw) in top1s {
-        if !country_tops.contains(&name_raw) {
-            country_tops.push(name_raw);
+    // Country top-1 spellings.
+    let mut country_tops = Vec::<String>::new();
+    for &country in selected_countries {
+        if let Some(first) = by_subset.get(country).and_then(|v| v.first())
+            && !country_tops.contains(first)
+        {
+            country_tops.push(first.clone());
         }
     }
 
+    let subset_list = by_subset.get(&subset_key).cloned().unwrap_or_default();
     if selected_countries.len() > 1 && country_tops.len() == 1 {
-        return global_top_n(state, kind, card_key, run_id, selected_countries, 3).await;
+        return Ok(subset_list.into_iter().take(3).collect());
     }
-
     if country_tops.len() >= 3 {
         country_tops.truncate(3);
         return Ok(country_tops);
     }
 
     let mut out = country_tops;
-    let global = global_top_n(state, kind, card_key, run_id, selected_countries, 10).await?;
-    for g in global {
+    for g in subset_list {
         if out.len() >= 3 {
             break;
         }
         if !out.contains(&g) {
             out.push(g);
         }
+    }
+    Ok(out)
+}
+
+async fn last5_year_ranks_materialized(
+    state: &AppState,
+    kind: CardKind,
+    card_key: &str,
+) -> Result<BTreeMap<String, Vec<RankPoint>>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT country, year, rank
+        FROM card_rank_last5
+        WHERE card_kind = ?1 AND card_key = ?2
+        ORDER BY country ASC, year ASC
+        "#,
+    )
+    .bind(kind.as_str())
+    .bind(card_key)
+    .fetch_all(&state.names_db)
+    .await
+    .context("load card ranks")?;
+
+    let mut out = BTreeMap::<String, Vec<RankPoint>>::new();
+    for r in rows {
+        let country: String = r.try_get("country")?;
+        let year: i64 = r.try_get("year")?;
+        let rank: i64 = r.try_get("rank")?;
+        out.entry(country)
+            .or_default()
+            .push(RankPoint { year, rank });
     }
     Ok(out)
 }

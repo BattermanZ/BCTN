@@ -117,3 +117,44 @@ CREATE TABLE IF NOT EXISTS variant_group_country_top100_any (
   top100_any INTEGER NOT NULL,
   PRIMARY KEY (variant_group_key, country)
 );
+
+-- Derived data (safe to rebuild): precomputed spellings and ranks for fast app reads.
+CREATE TABLE IF NOT EXISTS card_spelling_country_total (
+  card_kind TEXT NOT NULL, -- 'concept' | 'group'
+  card_key TEXT NOT NULL,
+  country TEXT NOT NULL,
+  name_raw TEXT NOT NULL,
+  total INTEGER NOT NULL,
+  PRIMARY KEY (card_kind, card_key, country, name_raw)
+);
+
+-- Sum over all countries (US/FR/CL) for pagination on the card details screen.
+CREATE TABLE IF NOT EXISTS card_spelling_total_all (
+  card_kind TEXT NOT NULL, -- 'concept' | 'group'
+  card_key TEXT NOT NULL,
+  name_raw TEXT NOT NULL,
+  total INTEGER NOT NULL,
+  PRIMARY KEY (card_kind, card_key, name_raw)
+);
+
+-- Top-N spellings per country-subset (US|FR|CL|US,FR|US,CL|FR,CL|US,FR,CL).
+CREATE TABLE IF NOT EXISTS card_spelling_subset_top (
+  card_kind TEXT NOT NULL, -- 'concept' | 'group'
+  card_key TEXT NOT NULL,
+  subset_key TEXT NOT NULL,
+  rank INTEGER NOT NULL,
+  name_raw TEXT NOT NULL,
+  total INTEGER NOT NULL,
+  PRIMARY KEY (card_kind, card_key, subset_key, rank)
+);
+
+-- Rank per country, last 5 years of the names window.
+CREATE TABLE IF NOT EXISTS card_rank_last5 (
+  card_kind TEXT NOT NULL, -- 'concept' | 'group'
+  card_key TEXT NOT NULL,
+  country TEXT NOT NULL,
+  year INTEGER NOT NULL,
+  rank INTEGER NOT NULL,
+  total INTEGER NOT NULL,
+  PRIMARY KEY (card_kind, card_key, country, year)
+);

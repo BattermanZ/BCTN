@@ -23,6 +23,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/me", get(auth::me))
         .route("/api/users", get(users::list))
         .route("/api/feed/next", get(feed::next))
+        .route("/api/feed/batch", get(feed::batch))
         .route("/api/swipes", post(swipes::create))
         .route("/api/swipes/undo", post(swipes::undo))
         .route("/api/matches", get(views::matches))

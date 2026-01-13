@@ -54,6 +54,13 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
 
     let tx = conn.transaction()?;
 
+    let run_id: i64 = tx.query_row("SELECT MAX(id) FROM import_run", [], |r| r.get(0))?;
+    let window_end_year: i64 = tx.query_row(
+        "SELECT window_end_year FROM import_run WHERE id = ?1",
+        params![run_id],
+        |r| r.get(0),
+    )?;
+
     tx.execute_batch(
         r#"
         DELETE FROM variant_group_country_top100_any;
@@ -62,12 +69,18 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
         DELETE FROM concept_country_window_total;
         DELETE FROM variant_group_member;
         DELETE FROM variant_group;
+        DELETE FROM card_rank_last5;
+        DELETE FROM card_spelling_subset_top;
+        DELETE FROM card_spelling_total_all;
+        DELETE FROM card_spelling_country_total;
         "#,
     )?;
 
     materialize_groups(&tx)?;
     materialize_concept_stats(&tx)?;
     materialize_group_stats(&tx)?;
+    materialize_card_spellings(&tx, run_id)?;
+    materialize_card_ranks(&tx, run_id, window_end_year)?;
 
     tx.commit()?;
     Ok(())
@@ -252,6 +265,209 @@ fn materialize_group_stats(conn: &Connection) -> Result<()> {
         GROUP BY vgm.variant_group_key, ctop.country
         "#,
         [],
+    )?;
+
+    Ok(())
+}
+
+fn materialize_card_spellings(conn: &Connection, run_id: i64) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        DELETE FROM card_spelling_country_total;
+        DELETE FROM card_spelling_total_all;
+        DELETE FROM card_spelling_subset_top;
+        "#,
+    )?;
+
+    // Per concept spelling totals, per country.
+    conn.execute(
+        r#"
+        INSERT INTO card_spelling_country_total (card_kind, card_key, country, name_raw, total)
+        SELECT
+          'concept' AS card_kind,
+          nc.concept_key AS card_key,
+          no.country AS country,
+          no.name_raw AS name_raw,
+          SUM(no.count) AS total
+        FROM name_concept nc
+        JOIN name_concept_member ncm ON ncm.concept_id = nc.id
+        JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+        WHERE no.run_id = ?1 AND no.country IN ('US','FR','CL')
+        GROUP BY nc.concept_key, no.country, no.name_raw
+        "#,
+        params![run_id],
+    )?;
+
+    // Per group spelling totals, per country (sum over member concepts).
+    conn.execute(
+        r#"
+        INSERT INTO card_spelling_country_total (card_kind, card_key, country, name_raw, total)
+        SELECT
+          'group' AS card_kind,
+          vgm.variant_group_key AS card_key,
+          no.country AS country,
+          no.name_raw AS name_raw,
+          SUM(no.count) AS total
+        FROM variant_group_member vgm
+        JOIN name_concept nc ON nc.concept_key = vgm.concept_key
+        JOIN name_concept_member ncm ON ncm.concept_id = nc.id
+        JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+        WHERE no.run_id = ?1 AND no.country IN ('US','FR','CL')
+        GROUP BY vgm.variant_group_key, no.country, no.name_raw
+        "#,
+        params![run_id],
+    )?;
+
+    // Global totals over all countries (for fast paging in details view).
+    conn.execute(
+        r#"
+        INSERT INTO card_spelling_total_all (card_kind, card_key, name_raw, total)
+        SELECT card_kind, card_key, name_raw, SUM(total) AS total
+        FROM card_spelling_country_total
+        GROUP BY card_kind, card_key, name_raw
+        "#,
+        [],
+    )?;
+
+    // Top spellings per subset of countries. Only 7 subsets since the set of evidence countries is fixed.
+    conn.execute(
+        r#"
+        WITH subset_totals AS (
+          SELECT card_kind, card_key, 'US' AS subset_key, name_raw, SUM(total) AS total
+          FROM card_spelling_country_total
+          WHERE country = 'US'
+          GROUP BY card_kind, card_key, name_raw
+
+          UNION ALL
+          SELECT card_kind, card_key, 'FR' AS subset_key, name_raw, SUM(total) AS total
+          FROM card_spelling_country_total
+          WHERE country = 'FR'
+          GROUP BY card_kind, card_key, name_raw
+
+          UNION ALL
+          SELECT card_kind, card_key, 'CL' AS subset_key, name_raw, SUM(total) AS total
+          FROM card_spelling_country_total
+          WHERE country = 'CL'
+          GROUP BY card_kind, card_key, name_raw
+
+          UNION ALL
+          SELECT card_kind, card_key, 'US,FR' AS subset_key, name_raw, SUM(total) AS total
+          FROM card_spelling_country_total
+          WHERE country IN ('US','FR')
+          GROUP BY card_kind, card_key, name_raw
+
+          UNION ALL
+          SELECT card_kind, card_key, 'US,CL' AS subset_key, name_raw, SUM(total) AS total
+          FROM card_spelling_country_total
+          WHERE country IN ('US','CL')
+          GROUP BY card_kind, card_key, name_raw
+
+          UNION ALL
+          SELECT card_kind, card_key, 'FR,CL' AS subset_key, name_raw, SUM(total) AS total
+          FROM card_spelling_country_total
+          WHERE country IN ('FR','CL')
+          GROUP BY card_kind, card_key, name_raw
+
+          UNION ALL
+          SELECT card_kind, card_key, 'US,FR,CL' AS subset_key, name_raw, SUM(total) AS total
+          FROM card_spelling_country_total
+          WHERE country IN ('US','FR','CL')
+          GROUP BY card_kind, card_key, name_raw
+        ),
+        ranked AS (
+          SELECT
+            card_kind,
+            card_key,
+            subset_key,
+            name_raw,
+            total,
+            ROW_NUMBER() OVER (
+              PARTITION BY card_kind, card_key, subset_key
+              ORDER BY total DESC, name_raw ASC
+            ) AS rn
+          FROM subset_totals
+        )
+        INSERT INTO card_spelling_subset_top (card_kind, card_key, subset_key, rank, name_raw, total)
+        SELECT card_kind, card_key, subset_key, rn, name_raw, total
+        FROM ranked
+        WHERE rn <= 10
+        "#,
+        [],
+    )?;
+
+    Ok(())
+}
+
+fn materialize_card_ranks(conn: &Connection, run_id: i64, window_end_year: i64) -> Result<()> {
+    conn.execute_batch("DELETE FROM card_rank_last5;")?;
+
+    let start_year = (window_end_year - 4).max(0);
+
+    // Concept ranks for last 5 years.
+    conn.execute(
+        r#"
+        WITH concept_year AS (
+          SELECT
+            nc.concept_key AS card_key,
+            no.country AS country,
+            no.year AS year,
+            SUM(no.count) AS total
+          FROM name_concept nc
+          JOIN name_concept_member ncm ON ncm.concept_id = nc.id
+          JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+          WHERE no.run_id = ?1
+            AND no.country IN ('US','FR','CL')
+            AND no.year BETWEEN ?2 AND ?3
+          GROUP BY nc.concept_key, no.country, no.year
+        ),
+        ranked AS (
+          SELECT
+            card_key,
+            country,
+            year,
+            total,
+            DENSE_RANK() OVER (PARTITION BY country, year ORDER BY total DESC) AS rnk
+          FROM concept_year
+        )
+        INSERT INTO card_rank_last5 (card_kind, card_key, country, year, rank, total)
+        SELECT 'concept', card_key, country, year, rnk, total
+        FROM ranked
+        "#,
+        params![run_id, start_year, window_end_year],
+    )?;
+
+    // Group ranks for last 5 years (sum member concepts per year).
+    conn.execute(
+        r#"
+        WITH group_year AS (
+          SELECT
+            vgm.variant_group_key AS card_key,
+            no.country AS country,
+            no.year AS year,
+            SUM(no.count) AS total
+          FROM variant_group_member vgm
+          JOIN name_concept nc ON nc.concept_key = vgm.concept_key
+          JOIN name_concept_member ncm ON ncm.concept_id = nc.id
+          JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+          WHERE no.run_id = ?1
+            AND no.country IN ('US','FR','CL')
+            AND no.year BETWEEN ?2 AND ?3
+          GROUP BY vgm.variant_group_key, no.country, no.year
+        ),
+        ranked AS (
+          SELECT
+            card_key,
+            country,
+            year,
+            total,
+            DENSE_RANK() OVER (PARTITION BY country, year ORDER BY total DESC) AS rnk
+          FROM group_year
+        )
+        INSERT INTO card_rank_last5 (card_kind, card_key, country, year, rank, total)
+        SELECT 'group', card_key, country, year, rnk, total
+        FROM ranked
+        "#,
+        params![run_id, start_year, window_end_year],
     )?;
 
     Ok(())

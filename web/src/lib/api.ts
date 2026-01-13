@@ -44,6 +44,8 @@ export type FeedQuery = {
   gender: string;
 };
 
+export type FeedBatchQuery = FeedQuery & { limit: number };
+
 export type SwipeCreateRequest = {
   card_key: string;
   card_kind: 'group' | 'concept';
@@ -103,8 +105,27 @@ export const api = {
     return await apiFetch<Card>(`/api/feed/next?${params.toString()}`);
   },
 
-  async cardDetails(card_key: string): Promise<Card> {
-    return await apiFetch<Card>(`/api/card/${encodeURIComponent(card_key)}`);
+  async feedBatch(q: FeedBatchQuery): Promise<Card[]> {
+    const params = new URLSearchParams({
+      countries: q.countries,
+      pop: q.pop,
+      include_extra_rare: q.include_extra_rare ? 'true' : 'false',
+      gender: q.gender,
+      limit: String(q.limit),
+    });
+    return await apiFetch<Card[]>(`/api/feed/batch?${params.toString()}`);
+  },
+
+  async cardDetails(
+    card_key: string,
+    opts?: { countries?: string; page?: number; page_size?: number }
+  ): Promise<Card> {
+    const params = new URLSearchParams();
+    if (opts?.countries) params.set('countries', opts.countries);
+    if (opts?.page !== undefined) params.set('page', String(opts.page));
+    if (opts?.page_size !== undefined) params.set('page_size', String(opts.page_size));
+    const qs = params.toString();
+    return await apiFetch<Card>(`/api/card/${encodeURIComponent(card_key)}${qs ? `?${qs}` : ''}`);
   },
 
   async createSwipe(req: SwipeCreateRequest): Promise<SwipeCreateResponse> {

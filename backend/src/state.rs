@@ -4,16 +4,10 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Row, Sqlite};
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct NamesWindow {
-    pub(crate) run_id: i64,
-}
-
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) db: Pool<Sqlite>,
     pub(crate) names_db: Pool<Sqlite>,
-    pub(crate) names_window: NamesWindow,
     pub(crate) country_total_births: CountryTotals,
     pub(crate) cookie_secure: bool,
 }
@@ -49,13 +43,12 @@ impl AppState {
             .await
             .with_context(|| format!("open names db {names_db:?}"))?;
 
-        let names_window = load_names_window(&names_db).await?;
-        let country_total_births = load_country_totals(&names_db, names_window.run_id).await?;
+        let run_id = load_latest_run_id(&names_db).await?;
+        let country_total_births = load_country_totals(&names_db, run_id).await?;
 
         Ok(Self {
             db,
             names_db,
-            names_window,
             country_total_births,
             cookie_secure,
         })
@@ -70,15 +63,12 @@ impl AppState {
     }
 }
 
-async fn load_names_window(names_db: &Pool<Sqlite>) -> Result<NamesWindow> {
+async fn load_latest_run_id(names_db: &Pool<Sqlite>) -> Result<i64> {
     let row = sqlx::query("SELECT id FROM import_run ORDER BY id DESC LIMIT 1")
         .fetch_one(names_db)
         .await
-        .context("load names window")?;
-
-    Ok(NamesWindow {
-        run_id: row.try_get("id")?,
-    })
+        .context("load latest import_run id")?;
+    Ok(row.try_get("id")?)
 }
 
 async fn load_country_totals(names_db: &Pool<Sqlite>, run_id: i64) -> Result<CountryTotals> {
