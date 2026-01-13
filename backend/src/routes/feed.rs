@@ -58,6 +58,8 @@ pub(crate) struct FeedCardResponse {
     score: Option<i64>,
     per_country: Vec<CountrySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    partner_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     last5_year_ranks: Option<BTreeMap<String, Vec<RankPoint>>>,
 }
 
@@ -347,6 +349,14 @@ async fn next_impl(
             .context("load best_pick_mode")?
             .unwrap_or(0);
 
+    if let Some((kind, card_key, partner_action)) = load_partner_priority(state, user_id).await? {
+        let candidate = load_candidate_for_key(state, kind, &card_key).await?;
+        let mut resp =
+            build_response(state, &candidate, &selected_countries, best_pick_mode != 0).await?;
+        resp.partner_action = Some(partner_action);
+        return Ok((jar, resp));
+    }
+
     let base_candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
 
     let mut candidates = Vec::<CandidateCard>::new();
@@ -417,7 +427,8 @@ async fn next_impl(
         candidates.choose(&mut rng).cloned().expect("non-empty")
     };
 
-    let resp = build_response(state, &chosen, &selected_countries, best_pick_mode != 0).await?;
+    let mut resp = build_response(state, &chosen, &selected_countries, best_pick_mode != 0).await?;
+    resp.partner_action = None;
     Ok((jar, resp))
 }
 
@@ -441,6 +452,23 @@ async fn batch_impl(
 
     let limit = q.limit.unwrap_or(10).clamp(1, 25);
     let base_candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
+
+    let mut out = Vec::with_capacity(limit as usize);
+    let priority = load_partner_priority_batch(state, user_id, limit).await?;
+    let mut priority_keys = HashSet::<String>::new();
+    for p in &priority {
+        priority_keys.insert(p.card_key.clone());
+    }
+    for p in priority {
+        let candidate = load_candidate_for_key(state, p.kind, &p.card_key).await?;
+        let mut resp =
+            build_response(state, &candidate, &selected_countries, best_pick_mode != 0).await?;
+        resp.partner_action = Some(p.partner_action);
+        out.push(resp);
+        if out.len() >= limit as usize {
+            return Ok((jar, out));
+        }
+    }
 
     let mut candidates = Vec::<CandidateCard>::new();
     let mut candidate_limit = base_candidate_limit;
@@ -488,6 +516,10 @@ async fn batch_impl(
             true
         });
 
+        if !priority_keys.is_empty() {
+            candidates.retain(|c| !priority_keys.contains(&c.card_key));
+        }
+
         if !candidates.is_empty() {
             break;
         }
@@ -508,17 +540,22 @@ async fn batch_impl(
                 c.cl,
             ))
         });
-        v.into_iter().take(limit as usize).collect()
+        v.into_iter()
+            .take(limit.saturating_sub(out.len() as i64) as usize)
+            .collect()
     } else {
         let mut rng = rand::rngs::OsRng;
         let mut v = candidates;
         v.shuffle(&mut rng);
-        v.into_iter().take(limit as usize).collect()
+        v.into_iter()
+            .take(limit.saturating_sub(out.len() as i64) as usize)
+            .collect()
     };
 
-    let mut out = Vec::with_capacity(chosen.len());
     for c in chosen {
-        out.push(build_response(state, &c, &selected_countries, best_pick_mode != 0).await?);
+        let mut resp = build_response(state, &c, &selected_countries, best_pick_mode != 0).await?;
+        resp.partner_action = None;
+        out.push(resp);
     }
     Ok((jar, out))
 }
@@ -573,9 +610,213 @@ async fn build_response(
         spellings_preview: preview,
         score,
         per_country,
+        partner_action: None,
         last5_year_ranks: Some(
             last5_year_ranks_materialized(state, chosen.card_kind, &chosen.card_key).await?,
         ),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct PartnerPriority {
+    kind: CardKind,
+    card_key: String,
+    partner_action: String,
+}
+
+async fn partner_user_id(state: &AppState, user_id: i64) -> Result<Option<i64>> {
+    let partner: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM app_user WHERE deleted_at IS NULL AND id != ?1 ORDER BY id LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .context("find partner user")?;
+    Ok(partner)
+}
+
+fn parse_card_kind(s: &str) -> Result<CardKind> {
+    match s {
+        "group" => Ok(CardKind::Group),
+        "concept" => Ok(CardKind::Concept),
+        other => bail!("invalid card_kind {other:?}"),
+    }
+}
+
+async fn load_partner_priority(
+    state: &AppState,
+    user_id: i64,
+) -> Result<Option<(CardKind, String, String)>> {
+    let Some(partner_id) = partner_user_id(state, user_id).await? else {
+        return Ok(None);
+    };
+
+    let row = sqlx::query(
+        r#"
+        SELECT s.card_key, s.card_kind, s.action
+        FROM swipe s
+        WHERE s.user_id = ?1
+          AND s.action IN ('like','superlike')
+          AND s.card_key NOT IN (SELECT card_key FROM swipe WHERE user_id = ?2)
+        ORDER BY s.created_at DESC, s.id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(partner_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .context("load partner priority")?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let card_key: String = row.try_get("card_key")?;
+    let card_kind: String = row.try_get("card_kind")?;
+    let action: String = row.try_get("action")?;
+    let kind = parse_card_kind(&card_kind)?;
+    Ok(Some((kind, card_key, action)))
+}
+
+async fn load_partner_priority_batch(
+    state: &AppState,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<PartnerPriority>> {
+    let Some(partner_id) = partner_user_id(state, user_id).await? else {
+        return Ok(Vec::new());
+    };
+
+    let rows = sqlx::query(
+        r#"
+        SELECT s.card_key, s.card_kind, s.action
+        FROM swipe s
+        WHERE s.user_id = ?1
+          AND s.action IN ('like','superlike')
+          AND s.card_key NOT IN (SELECT card_key FROM swipe WHERE user_id = ?2)
+        ORDER BY s.created_at DESC, s.id DESC
+        LIMIT ?3
+        "#,
+    )
+    .bind(partner_id)
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await
+    .context("load partner priority batch")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let card_key: String = r.try_get("card_key")?;
+        let card_kind: String = r.try_get("card_kind")?;
+        let action: String = r.try_get("action")?;
+        out.push(PartnerPriority {
+            kind: parse_card_kind(&card_kind)?,
+            card_key,
+            partner_action: action,
+        });
+    }
+    Ok(out)
+}
+
+async fn load_candidate_for_key(
+    state: &AppState,
+    kind: CardKind,
+    card_key: &str,
+) -> Result<CandidateCard> {
+    let row = match kind {
+        CardKind::Group => {
+            sqlx::query(
+                r#"
+                SELECT
+                  ns.display AS display_name,
+                  COALESCE(us.total, 0) AS us_total,
+                  COALESCE(us.male, 0) AS us_male,
+                  COALESCE(us.female, 0) AS us_female,
+                  COALESCE(ust.top100_any, 0) AS us_top,
+                  COALESCE(fr.total, 0) AS fr_total,
+                  COALESCE(fr.male, 0) AS fr_male,
+                  COALESCE(fr.female, 0) AS fr_female,
+                  COALESCE(frt.top100_any, 0) AS fr_top,
+                  COALESCE(cl.total, 0) AS cl_total,
+                  COALESCE(cl.male, 0) AS cl_male,
+                  COALESCE(cl.female, 0) AS cl_female,
+                  COALESCE(clt.top100_any, 0) AS cl_top
+                FROM variant_group vg
+                JOIN name_concept nc ON nc.concept_key = vg.variant_group_key
+                JOIN name_string ns ON ns.id = nc.preferred_name_string_id
+                LEFT JOIN variant_group_country_window_total us ON us.variant_group_key = vg.variant_group_key AND us.country='US'
+                LEFT JOIN variant_group_country_top100_any ust ON ust.variant_group_key = vg.variant_group_key AND ust.country='US'
+                LEFT JOIN variant_group_country_window_total fr ON fr.variant_group_key = vg.variant_group_key AND fr.country='FR'
+                LEFT JOIN variant_group_country_top100_any frt ON frt.variant_group_key = vg.variant_group_key AND frt.country='FR'
+                LEFT JOIN variant_group_country_window_total cl ON cl.variant_group_key = vg.variant_group_key AND cl.country='CL'
+                LEFT JOIN variant_group_country_top100_any clt ON clt.variant_group_key = vg.variant_group_key AND clt.country='CL'
+                WHERE vg.variant_group_key = ?1
+                "#,
+            )
+            .bind(card_key)
+            .fetch_one(&state.names_db)
+            .await
+            .context("load group candidate")?
+        }
+        CardKind::Concept => {
+            sqlx::query(
+                r#"
+                SELECT
+                  ns.display AS display_name,
+                  COALESCE(us.total, 0) AS us_total,
+                  COALESCE(us.male, 0) AS us_male,
+                  COALESCE(us.female, 0) AS us_female,
+                  COALESCE(ust.top100_any, 0) AS us_top,
+                  COALESCE(fr.total, 0) AS fr_total,
+                  COALESCE(fr.male, 0) AS fr_male,
+                  COALESCE(fr.female, 0) AS fr_female,
+                  COALESCE(frt.top100_any, 0) AS fr_top,
+                  COALESCE(cl.total, 0) AS cl_total,
+                  COALESCE(cl.male, 0) AS cl_male,
+                  COALESCE(cl.female, 0) AS cl_female,
+                  COALESCE(clt.top100_any, 0) AS cl_top
+                FROM name_concept nc
+                JOIN name_string ns ON ns.id = nc.preferred_name_string_id
+                LEFT JOIN concept_country_window_total us ON us.concept_id = nc.id AND us.country='US'
+                LEFT JOIN concept_country_top100_any ust ON ust.concept_id = nc.id AND ust.country='US'
+                LEFT JOIN concept_country_window_total fr ON fr.concept_id = nc.id AND fr.country='FR'
+                LEFT JOIN concept_country_top100_any frt ON frt.concept_id = nc.id AND frt.country='FR'
+                LEFT JOIN concept_country_window_total cl ON cl.concept_id = nc.id AND cl.country='CL'
+                LEFT JOIN concept_country_top100_any clt ON clt.concept_id = nc.id AND clt.country='CL'
+                WHERE nc.concept_key = ?1
+                "#,
+            )
+            .bind(card_key)
+            .fetch_one(&state.names_db)
+            .await
+            .context("load concept candidate")?
+        }
+    };
+
+    let display_name: String = row.try_get("display_name")?;
+    Ok(CandidateCard {
+        card_kind: kind,
+        card_key: card_key.to_string(),
+        display_name,
+        us: CountryStats {
+            total: row.try_get("us_total")?,
+            male: row.try_get("us_male")?,
+            female: row.try_get("us_female")?,
+            top100_any: row.try_get::<i64, _>("us_top")? != 0,
+        },
+        fr: CountryStats {
+            total: row.try_get("fr_total")?,
+            male: row.try_get("fr_male")?,
+            female: row.try_get("fr_female")?,
+            top100_any: row.try_get::<i64, _>("fr_top")? != 0,
+        },
+        cl: CountryStats {
+            total: row.try_get("cl_total")?,
+            male: row.try_get("cl_male")?,
+            female: row.try_get("cl_female")?,
+            top100_any: row.try_get::<i64, _>("cl_top")? != 0,
+        },
     })
 }
 

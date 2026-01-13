@@ -82,6 +82,28 @@
 <div
   class={`relative overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm ${className}`}
 >
+  {#if card.partner_action}
+    <div class="pointer-events-none absolute inset-x-0 top-0 z-10 px-5 pt-4">
+      <div class="grid gap-2">
+        <div
+          class={`h-1.5 rounded-full ${
+            card.partner_action === 'superlike' ? 'bg-amber-400' : 'bg-emerald-400'
+          }`}
+        ></div>
+        <div
+          class={`h-1.5 rounded-full ${
+            card.partner_action === 'superlike' ? 'bg-amber-300' : 'bg-emerald-300'
+          }`}
+        ></div>
+        <div
+          class={`h-1.5 rounded-full ${
+            card.partner_action === 'superlike' ? 'bg-amber-200' : 'bg-emerald-200'
+          }`}
+        ></div>
+      </div>
+    </div>
+  {/if}
+
   <div
     class="pointer-events-none absolute inset-0"
     style={`background: radial-gradient(circle at 30% 10%, rgba(${tintRgb}, 0.10), transparent 55%);`}

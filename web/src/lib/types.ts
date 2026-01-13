@@ -26,6 +26,7 @@ export type Card = {
   card_kind: CardKind;
   display_name: string;
   spellings_preview: string[];
+  partner_action?: 'like' | 'superlike';
   score?: number;
   per_country: PerCountryStats[];
   sex_split?: Partial<
