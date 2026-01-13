@@ -396,7 +396,7 @@ fn materialize_card_spellings(conn: &Connection, run_id: i64) -> Result<()> {
 fn materialize_card_ranks(conn: &Connection, run_id: i64) -> Result<()> {
     conn.execute_batch("DELETE FROM card_rank_last5;")?;
 
-    // Rank for each card is based on the card's top spelling for that country (what the user sees on the front).
+    // Rank for each card is based on the card's top spelling for that country/year (what the user sees on the front).
     // For the year window, each country uses its own latest 5 years available in its dataset.
     conn.execute(
         r#"
@@ -435,25 +435,66 @@ fn materialize_card_ranks(conn: &Connection, run_id: i64) -> Result<()> {
             DENSE_RANK() OVER (PARTITION BY country, year ORDER BY total DESC, name_raw ASC) AS rnk
           FROM name_year
         ),
-        card_top_spelling AS (
+        card_name_year AS (
+          -- Per concept spelling totals per country/year.
+          SELECT
+            'concept' AS card_kind,
+            nc.concept_key AS card_key,
+            no.country AS country,
+            no.year AS year,
+            no.name_raw AS name_raw,
+            SUM(no.count) AS total
+          FROM name_concept nc
+          JOIN name_concept_member ncm ON ncm.concept_id = nc.id
+          JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+          JOIN country_years cy ON cy.country = no.country AND cy.year = no.year
+          WHERE no.run_id = ?1 AND no.country IN ('US','FR','CL')
+          GROUP BY nc.concept_key, no.country, no.year, no.name_raw
+
+          UNION ALL
+
+          -- Per group spelling totals per country/year (sum over member concepts).
+          SELECT
+            'group' AS card_kind,
+            vgm.variant_group_key AS card_key,
+            no.country AS country,
+            no.year AS year,
+            no.name_raw AS name_raw,
+            SUM(no.count) AS total
+          FROM variant_group_member vgm
+          JOIN name_concept nc ON nc.concept_key = vgm.concept_key
+          JOIN name_concept_member ncm ON ncm.concept_id = nc.id
+          JOIN name_observation no ON no.name_string_id = ncm.name_string_id
+          JOIN country_years cy ON cy.country = no.country AND cy.year = no.year
+          WHERE no.run_id = ?1 AND no.country IN ('US','FR','CL')
+          GROUP BY vgm.variant_group_key, no.country, no.year, no.name_raw
+        ),
+        top_spelling_per_card_year AS (
           SELECT
             card_kind,
             card_key,
-            subset_key AS country,
-            name_raw
-          FROM card_spelling_subset_top
-          WHERE subset_key IN ('US','FR','CL') AND rank = 1
+            country,
+            year,
+            name_raw,
+            total,
+            ROW_NUMBER() OVER (
+              PARTITION BY card_kind, card_key, country, year
+              ORDER BY total DESC, name_raw ASC
+            ) AS rn
+          FROM card_name_year
         )
         INSERT INTO card_rank_last5 (card_kind, card_key, country, year, rank, total)
         SELECT
-          cts.card_kind,
-          cts.card_key,
-          rn.country,
-          rn.year,
+          ts.card_kind,
+          ts.card_key,
+          ts.country,
+          ts.year,
           rn.rnk,
           rn.total
-        FROM card_top_spelling cts
-        JOIN ranked_names rn ON rn.country = cts.country AND rn.name_raw = cts.name_raw
+        FROM top_spelling_per_card_year ts
+        JOIN ranked_names rn
+          ON rn.country = ts.country AND rn.year = ts.year AND rn.name_raw = ts.name_raw
+        WHERE ts.rn = 1
         "#,
         params![run_id],
     )?;

@@ -780,7 +780,7 @@
                                 {#if split && split.male + split.female > 0}
                                   <div
                                     class="absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border border-white shadow-sm"
-                                    style={`left: calc(${split.male_pct}% - 10px); background: rgb(${topTintRgb});`}
+                                    style={`left: clamp(0px, calc(${split.male_pct}% - 10px), calc(100% - 20px)); background: rgb(${topTintRgb});`}
                                   ></div>
                                 {/if}
                               </div>
