@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -481,108 +482,293 @@ fn materialize_card_spellings(conn: &Connection, run_id: i64) -> Result<()> {
 fn materialize_card_ranks(conn: &Connection, run_id: i64) -> Result<()> {
     conn.execute_batch("DELETE FROM card_rank_last5;")?;
 
-    // Rank for each card is based on the card's top spelling for that country/year (what the user sees on the front).
-    // For the year window, each country uses its own latest 5 years available in its dataset.
-    conn.execute(
-        r#"
-        WITH country_years AS (
-          SELECT country, year
-          FROM (
-            SELECT
-              country,
-              year,
-              DENSE_RANK() OVER (PARTITION BY country ORDER BY year DESC) AS yrnk
-            FROM (
-              SELECT DISTINCT country, year
-              FROM name_observation
-              WHERE run_id = ?1 AND country IN ('US','FR','CL')
-            )
-          )
-          WHERE yrnk <= 5
-        ),
-        name_year AS (
-          SELECT
-            no.country AS country,
-            no.year AS year,
-            no.name_raw AS name_raw,
-            SUM(no.count) AS total
-          FROM name_observation no
-          JOIN country_years cy ON cy.country = no.country AND cy.year = no.year
-          WHERE no.run_id = ?1 AND no.country IN ('US','FR','CL')
-          GROUP BY no.country, no.year, no.name_raw
-        ),
-        ranked_names AS (
-          SELECT
-            country,
-            year,
-            name_raw,
-            total,
-            DENSE_RANK() OVER (PARTITION BY country, year ORDER BY total DESC, name_raw ASC) AS rnk
-          FROM name_year
-        ),
-        card_name_year AS (
-          -- Per concept spelling totals per country/year.
-          SELECT
-            'concept' AS card_kind,
-            nc.concept_key AS card_key,
-            no.country AS country,
-            no.year AS year,
-            no.name_raw AS name_raw,
-            SUM(no.count) AS total
-          FROM name_concept nc
-          JOIN name_concept_member ncm ON ncm.concept_id = nc.id
-          JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-          JOIN country_years cy ON cy.country = no.country AND cy.year = no.year
-          WHERE no.run_id = ?1 AND no.country IN ('US','FR','CL')
-          GROUP BY nc.concept_key, no.country, no.year, no.name_raw
+    // This used to be one big SQL query (window functions + huge GROUP BY) and was very slow.
+    // We now compute per (country,year) in parallel and bulk-insert the results into SQLite.
+    //
+    // Semantics:
+    // - Each country uses its own latest 5 years available in its dataset.
+    // - For each card, we pick the top spelling for that country+year, and use that spelling's
+    //   rank among all names in that country+year.
 
-          UNION ALL
+    let mut concept_keys_by_name_string_id = HashMap::<i64, Vec<String>>::new();
+    {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT ncm.name_string_id AS name_string_id, nc.concept_key AS concept_key
+            FROM name_concept_member ncm
+            JOIN name_concept nc ON nc.id = ncm.concept_id
+            "#,
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let name_string_id: i64 = r.get(0)?;
+            let concept_key: String = r.get(1)?;
+            concept_keys_by_name_string_id
+                .entry(name_string_id)
+                .or_default()
+                .push(concept_key);
+        }
+    }
 
-          -- Per group spelling totals per country/year (sum over member concepts).
-          SELECT
-            'group' AS card_kind,
-            vgm.variant_group_key AS card_key,
-            no.country AS country,
-            no.year AS year,
-            no.name_raw AS name_raw,
-            SUM(no.count) AS total
-          FROM variant_group_member vgm
-          JOIN name_concept nc ON nc.concept_key = vgm.concept_key
-          JOIN name_concept_member ncm ON ncm.concept_id = nc.id
-          JOIN name_observation no ON no.name_string_id = ncm.name_string_id
-          JOIN country_years cy ON cy.country = no.country AND cy.year = no.year
-          WHERE no.run_id = ?1 AND no.country IN ('US','FR','CL')
-          GROUP BY vgm.variant_group_key, no.country, no.year, no.name_raw
-        ),
-        top_spelling_per_card_year AS (
-          SELECT
-            card_kind,
-            card_key,
-            country,
-            year,
-            name_raw,
-            total,
-            ROW_NUMBER() OVER (
-              PARTITION BY card_kind, card_key, country, year
-              ORDER BY total DESC, name_raw ASC
-            ) AS rn
-          FROM card_name_year
-        )
-        INSERT INTO card_rank_last5 (card_kind, card_key, country, year, rank, total)
-        SELECT
-          ts.card_kind,
-          ts.card_key,
-          ts.country,
-          ts.year,
-          rn.rnk,
-          rn.total
-        FROM top_spelling_per_card_year ts
-        JOIN ranked_names rn
-          ON rn.country = ts.country AND rn.year = ts.year AND rn.name_raw = ts.name_raw
-        WHERE ts.rn = 1
-        "#,
-        params![run_id],
+    let mut group_by_concept_key = HashMap::<String, String>::new();
+    {
+        let mut stmt =
+            conn.prepare("SELECT concept_key, variant_group_key FROM variant_group_member")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let concept_key: String = r.get(0)?;
+            let group_key: String = r.get(1)?;
+            // A concept should only belong to one group; keep the first if duplicates exist.
+            group_by_concept_key.entry(concept_key).or_insert(group_key);
+        }
+    }
+
+    #[derive(Debug)]
+    struct Task {
+        country: String,
+        year: i64,
+        global_totals: Vec<(String, i64)>,
+        ns_totals: Vec<(i64, String, i64)>, // (name_string_id, name_raw, total)
+    }
+
+    let mut years_by_country = HashMap::<String, Vec<i64>>::new();
+    for country in ["US", "FR", "CL"] {
+        let years: Vec<i64> = conn
+            .prepare(
+                r#"
+                SELECT DISTINCT year
+                FROM name_observation
+                WHERE run_id = ?1 AND country = ?2
+                ORDER BY year DESC
+                LIMIT 5
+                "#,
+            )?
+            .query_map(params![run_id, country], |r| r.get::<_, i64>(0))?
+            .map(|r| r.unwrap())
+            .collect();
+        years_by_country.insert(country.to_string(), years);
+    }
+
+    let mut tasks = Vec::<Task>::new();
+    for (country, years) in &years_by_country {
+        for &year in years {
+            eprintln!("materialize_card_ranks_load\tcountry={country}\tyear={year}");
+
+            let global_totals: Vec<(String, i64)> = conn
+                .prepare(
+                    r#"
+                    SELECT name_raw, SUM(count) AS total
+                    FROM name_observation
+                    WHERE run_id = ?1 AND country = ?2 AND year = ?3
+                    GROUP BY name_raw
+                    "#,
+                )?
+                .query_map(params![run_id, country, year], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })?
+                .map(|r| r.unwrap())
+                .collect();
+
+            let ns_totals: Vec<(i64, String, i64)> = conn
+                .prepare(
+                    r#"
+                    SELECT name_string_id, name_raw, SUM(count) AS total
+                    FROM name_observation
+                    WHERE run_id = ?1 AND country = ?2 AND year = ?3
+                    GROUP BY name_string_id, name_raw
+                    "#,
+                )?
+                .query_map(params![run_id, country, year], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })?
+                .map(|r| r.unwrap())
+                .collect();
+
+            tasks.push(Task {
+                country: country.clone(),
+                year,
+                global_totals,
+                ns_totals,
+            });
+        }
+    }
+
+    #[derive(Debug)]
+    struct RankRow {
+        card_kind: &'static str,
+        card_key: String,
+        country: String,
+        year: i64,
+        rank: i64,
+        total: i64,
+    }
+
+    fn better_best(total: i64, name_raw: &str, best_total: i64, best_name: &str) -> bool {
+        total > best_total || (total == best_total && name_raw < best_name)
+    }
+
+    let queue = std::sync::Arc::new(std::sync::Mutex::new(VecDeque::from(tasks)));
+    let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::<RankRow>::new()));
+
+    let worker_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(8)
+        .min(queue.lock().unwrap().len().max(1));
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let queue = std::sync::Arc::clone(&queue);
+            let results = std::sync::Arc::clone(&results);
+            let concept_keys_by_name_string_id = &concept_keys_by_name_string_id;
+            let group_by_concept_key = &group_by_concept_key;
+
+            scope.spawn(move || loop {
+                let task = {
+                    let mut q = queue.lock().unwrap();
+                    q.pop_front()
+                };
+                let Some(task) = task else { break };
+
+                let started = Instant::now();
+
+                // Build dense rank over all names for this country+year.
+                let mut globals = task.global_totals;
+                globals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                let mut rank_by_name = HashMap::<String, (i64, i64)>::new(); // name_raw -> (rank,total)
+                let mut last_total: Option<i64> = None;
+                let mut dense_rank: i64 = 0;
+                for (name_raw, total) in globals {
+                    if last_total.map(|t| t != total).unwrap_or(true) {
+                        dense_rank += 1;
+                        last_total = Some(total);
+                    }
+                    rank_by_name.insert(name_raw, (dense_rank, total));
+                }
+
+                // Aggregate spelling totals per card for this country+year to find the top spelling.
+                let mut concept_spell_totals = HashMap::<(String, String), i64>::new();
+                let mut group_spell_totals = HashMap::<(String, String), i64>::new();
+                let mut best_concept = HashMap::<String, (i64, String)>::new();
+                let mut best_group = HashMap::<String, (i64, String)>::new();
+
+                for (name_string_id, name_raw, total) in task.ns_totals {
+                    let Some(concepts) = concept_keys_by_name_string_id.get(&name_string_id) else {
+                        continue;
+                    };
+
+                    for concept_key in concepts {
+                        let key = (concept_key.clone(), name_raw.clone());
+                        let entry = concept_spell_totals.entry(key).or_insert(0);
+                        *entry += total;
+                        let cur_total = *entry;
+
+                        match best_concept.get(concept_key) {
+                            None => {
+                                best_concept.insert(concept_key.clone(), (cur_total, name_raw.clone()));
+                            }
+                            Some((best_total, best_name)) => {
+                                if better_best(cur_total, &name_raw, *best_total, best_name) {
+                                    best_concept.insert(concept_key.clone(), (cur_total, name_raw.clone()));
+                                }
+                            }
+                        }
+
+                        let Some(group_key) = group_by_concept_key.get(concept_key) else {
+                            continue;
+                        };
+
+                        let gkey = (group_key.clone(), name_raw.clone());
+                        let gentry = group_spell_totals.entry(gkey).or_insert(0);
+                        *gentry += total;
+                        let g_total = *gentry;
+
+                        match best_group.get(group_key) {
+                            None => {
+                                best_group.insert(group_key.clone(), (g_total, name_raw.clone()));
+                            }
+                            Some((best_total, best_name)) => {
+                                if better_best(g_total, &name_raw, *best_total, best_name) {
+                                    best_group.insert(group_key.clone(), (g_total, name_raw.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let mut out = Vec::<RankRow>::new();
+                for (concept_key, (_best_total, best_name)) in best_concept {
+                    let Some((rank, global_total)) = rank_by_name.get(&best_name).copied() else {
+                        continue;
+                    };
+                    out.push(RankRow {
+                        card_kind: "concept",
+                        card_key: concept_key,
+                        country: task.country.clone(),
+                        year: task.year,
+                        rank,
+                        total: global_total,
+                    });
+                }
+
+                for (group_key, (_best_total, best_name)) in best_group {
+                    let Some((rank, global_total)) = rank_by_name.get(&best_name).copied() else {
+                        continue;
+                    };
+                    out.push(RankRow {
+                        card_kind: "group",
+                        card_key: group_key,
+                        country: task.country.clone(),
+                        year: task.year,
+                        rank,
+                        total: global_total,
+                    });
+                }
+
+                eprintln!(
+                    "materialize_card_ranks_chunk_done\tcountry={}\tyear={}\trows={}\telapsed_ms={}",
+                    task.country,
+                    task.year,
+                    out.len(),
+                    started.elapsed().as_millis()
+                );
+
+                let mut r = results.lock().unwrap();
+                r.extend(out);
+            });
+        }
+    });
+
+    let mut rows = std::sync::Arc::try_unwrap(results)
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    // Deterministic insert order.
+    rows.sort_by(|a, b| {
+        a.card_kind
+            .cmp(b.card_kind)
+            .then_with(|| a.card_key.cmp(&b.card_key))
+            .then_with(|| a.country.cmp(&b.country))
+            .then_with(|| a.year.cmp(&b.year))
+    });
+
+    let mut insert = conn.prepare(
+        "INSERT INTO card_rank_last5 (card_kind, card_key, country, year, rank, total) VALUES (?1,?2,?3,?4,?5,?6)",
     )?;
+    for r in rows {
+        insert.execute(params![
+            r.card_kind,
+            r.card_key,
+            r.country,
+            r.year,
+            r.rank,
+            r.total
+        ])?;
+    }
 
     Ok(())
 }
