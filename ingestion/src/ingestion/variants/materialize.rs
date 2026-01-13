@@ -9,6 +9,27 @@ use rusqlite::{Connection, params};
 use crate::cli::VariantsMaterializeArgs;
 use crate::db;
 
+fn last5_years_by_country(conn: &Connection, run_id: i64) -> Result<HashMap<String, Vec<i64>>> {
+    let mut out = HashMap::<String, Vec<i64>>::new();
+    for country in ["US", "FR", "CL"] {
+        let years: Vec<i64> = conn
+            .prepare(
+                r#"
+                SELECT DISTINCT year
+                FROM name_observation
+                WHERE run_id = ?1 AND country = ?2
+                ORDER BY year DESC
+                LIMIT 5
+                "#,
+            )?
+            .query_map(params![run_id, country], |r| r.get::<_, i64>(0))?
+            .map(|r| r.unwrap())
+            .collect();
+        out.insert(country.to_string(), years);
+    }
+    Ok(out)
+}
+
 #[derive(Debug)]
 struct Dsu {
     parent: Vec<usize>,
@@ -95,6 +116,7 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
 
     let run_id: i64 = tx.query_row("SELECT MAX(id) FROM import_run", [], |r| r.get(0))?;
     eprintln!("materialize_start\trun_id={run_id}");
+    let years_by_country = last5_years_by_country(&tx, run_id)?;
 
     let clear_started = Instant::now();
     tx.execute_batch(
@@ -152,7 +174,7 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
     );
 
     let started = Instant::now();
-    materialize_card_ranks(&tx, run_id)?;
+    materialize_card_ranks(&tx, run_id, &years_by_country)?;
     eprintln!(
         "materialize_step\taction=card_ranks\telapsed_ms={}\tranks={}",
         started.elapsed().as_millis(),
@@ -161,20 +183,11 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
 
     // Persist the last-5-year window per country for the UI (so we can show missing years as "-").
     for country in ["US", "FR", "CL"] {
-        let mut stmt = tx.prepare(
-            r#"
-            SELECT DISTINCT year
-            FROM name_observation
-            WHERE run_id = ?1 AND country = ?2
-            ORDER BY year DESC
-            LIMIT 5
-            "#,
-        )?;
-        let years: Vec<i64> = stmt
-            .query_map(params![run_id, country], |r| r.get::<_, i64>(0))?
-            .map(|r| r.unwrap())
-            .collect();
-        for year in years {
+        for &year in years_by_country
+            .get(country)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
             tx.execute(
                 "INSERT OR IGNORE INTO country_last5_year (country, year) VALUES (?1, ?2)",
                 params![country, year],
@@ -503,7 +516,11 @@ fn materialize_card_spellings(conn: &Connection, run_id: i64) -> Result<()> {
     Ok(())
 }
 
-fn materialize_card_ranks(conn: &Connection, run_id: i64) -> Result<()> {
+fn materialize_card_ranks(
+    conn: &Connection,
+    run_id: i64,
+    years_by_country: &HashMap<String, Vec<i64>>,
+) -> Result<()> {
     conn.execute_batch("DELETE FROM card_rank_last5;")?;
 
     // This used to be one big SQL query (window functions + huge GROUP BY) and was very slow.
@@ -555,26 +572,12 @@ fn materialize_card_ranks(conn: &Connection, run_id: i64) -> Result<()> {
         ns_totals: Vec<(i64, String, i64)>, // (name_string_id, name_raw, total)
     }
 
-    let mut years_by_country = HashMap::<String, Vec<i64>>::new();
-    for country in ["US", "FR", "CL"] {
-        let years: Vec<i64> = conn
-            .prepare(
-                r#"
-                SELECT DISTINCT year
-                FROM name_observation
-                WHERE run_id = ?1 AND country = ?2
-                ORDER BY year DESC
-                LIMIT 5
-                "#,
-            )?
-            .query_map(params![run_id, country], |r| r.get::<_, i64>(0))?
-            .map(|r| r.unwrap())
-            .collect();
-        years_by_country.insert(country.to_string(), years);
-    }
-
     let mut tasks = Vec::<Task>::new();
-    for (country, years) in &years_by_country {
+    for country in ["US", "FR", "CL"] {
+        let years = years_by_country
+            .get(country)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         for &year in years {
             eprintln!("materialize_card_ranks_load\tcountry={country}\tyear={year}");
 
@@ -613,7 +616,7 @@ fn materialize_card_ranks(conn: &Connection, run_id: i64) -> Result<()> {
                 .collect();
 
             tasks.push(Task {
-                country: country.clone(),
+                country: country.to_string(),
                 year,
                 global_totals,
                 ns_totals,
@@ -908,7 +911,8 @@ mod tests {
         insert_obs(&conn, 5, 1, 2, "B", "US", 2024, 120);
         insert_obs(&conn, 6, 1, 3, "Z", "US", 2024, 80);
 
-        materialize_card_ranks(&conn, 1).unwrap();
+        let years_by_country = super::last5_years_by_country(&conn, 1).unwrap();
+        materialize_card_ranks(&conn, 1, &years_by_country).unwrap();
 
         let ranks: Vec<(i64, i64)> = conn
             .prepare(
