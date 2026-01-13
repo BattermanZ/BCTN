@@ -34,3 +34,6 @@ CREATE INDEX IF NOT EXISTS idx_card_spelling_total_all_lookup
   ON card_spelling_total_all(card_kind, card_key, total DESC, name_raw);
 CREATE INDEX IF NOT EXISTS idx_card_rank_last5_lookup
   ON card_rank_last5(card_kind, card_key, country, year);
+
+CREATE INDEX IF NOT EXISTS idx_country_last5_year_lookup
+  ON country_last5_year(country, year);

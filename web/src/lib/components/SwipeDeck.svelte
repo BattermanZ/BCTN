@@ -515,12 +515,29 @@
   );
   const topTintRgb = $derived(tintRgbForGender(topGenderInfo.gender));
 
-  type RankPoint = { year: number; rank: number };
-  function rankEntries(input: Card['last5_year_ranks']): Array<[CountryCode, Array<RankPoint>]> {
-    if (!input) return [];
-    return (Object.entries(input) as Array<[CountryCode, Array<RankPoint> | undefined]>)
-      .filter(([, ranks]) => Array.isArray(ranks) && ranks.length > 0)
-      .map(([country, ranks]) => [country, ranks as Array<RankPoint>]);
+  function countryLabel(country: CountryCode): string {
+    switch (country) {
+      case 'US':
+        return 'United States';
+      case 'FR':
+        return 'France';
+      case 'CL':
+        return 'Chile';
+      default:
+        return country;
+    }
+  }
+
+  function rankYearsFor(country: CountryCode): number[] {
+    return topCard?.last5_years?.[country] ?? [];
+  }
+
+  function rankByYearFor(country: CountryCode): Record<string, number> {
+    const m: Record<string, number> = {};
+    for (const r of topCard?.last5_year_ranks?.[country] ?? []) {
+      m[String(r.year)] = r.rank;
+    }
+    return m;
   }
 
   type SexSplit = NonNullable<Card['sex_split']>[CountryCode];
@@ -765,7 +782,7 @@
                           {@const total = split ? split.male + split.female : 0}
                           <div>
                             <div class="flex items-center justify-between text-xs text-zinc-500">
-                              <div class="font-semibold">{country}</div>
+                              <div class="font-semibold">{countryLabel(country)}</div>
                               {#if split && total > 0}
                                 <div>
                                   Male {Math.round(split.male_pct)}% · Female {Math.round(
@@ -808,20 +825,29 @@
                       <div class="text-sm font-semibold text-zinc-900">Rank (last 5 years)</div>
                       {#if detailsLoading && !topCard.last5_year_ranks}
                         <div class="mt-2 text-sm text-zinc-600">Fetching ranks…</div>
-                      {:else if topCard.last5_year_ranks}
+                      {:else if topCard.last5_years}
                         <div class="mt-3 space-y-4">
-                          {#each rankEntries(topCard.last5_year_ranks) as [country, ranks] (country)}
-                            <div>
-                              <div class="text-xs font-semibold text-zinc-500">{country}</div>
-                              <div class="mt-2 grid grid-cols-5 gap-2 text-center text-[11px]">
-                                {#each ranks as r (r.year)}
-                                  <div class="rounded-xl border border-zinc-200 bg-white p-2">
-                                    <div class="text-zinc-500">{r.year}</div>
-                                    <div class="mt-1 font-semibold">#{r.rank}</div>
-                                  </div>
-                                {/each}
+                          {#each $filters.countries as country (country)}
+                            {@const years = rankYearsFor(country)}
+                            {@const byYear = rankByYearFor(country)}
+                            {#if years.length}
+                              <div>
+                                <div class="text-xs font-semibold text-zinc-500">
+                                  {countryLabel(country)}
+                                </div>
+                                <div class="mt-2 grid grid-cols-5 gap-2 text-center text-[11px]">
+                                  {#each years as year (year)}
+                                    {@const rank = byYear[String(year)]}
+                                    <div class="rounded-xl border border-zinc-200 bg-white p-2">
+                                      <div class="text-zinc-500">{year}</div>
+                                      <div class="mt-1 font-semibold">
+                                        {rank !== undefined ? `#${rank}` : '—'}
+                                      </div>
+                                    </div>
+                                  {/each}
+                                </div>
                               </div>
-                            </div>
+                            {/if}
                           {/each}
                         </div>
                       {:else}

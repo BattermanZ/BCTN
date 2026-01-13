@@ -158,3 +158,10 @@ CREATE TABLE IF NOT EXISTS card_rank_last5 (
   total INTEGER NOT NULL,
   PRIMARY KEY (card_kind, card_key, country, year)
 );
+
+-- Per-country last 5 years available in the dataset (used for displaying gaps as "-").
+CREATE TABLE IF NOT EXISTS country_last5_year (
+  country TEXT NOT NULL,
+  year INTEGER NOT NULL,
+  PRIMARY KEY (country, year)
+);

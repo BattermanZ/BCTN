@@ -22,6 +22,7 @@ pub(crate) struct CardDetailsResponse {
     sex_split: BTreeMap<String, SexSplit>,
     all_spellings: Vec<String>,
     within_concept_variants: Vec<String>,
+    last5_years: BTreeMap<String, Vec<i64>>,
     last5_year_ranks: BTreeMap<String, Vec<RankPoint>>,
 }
 
@@ -622,6 +623,28 @@ async fn last5_year_ranks_materialized(
     Ok(out)
 }
 
+async fn country_last5_years(state: &AppState) -> Result<BTreeMap<String, Vec<i64>>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT country, year
+        FROM country_last5_year
+        WHERE country IN ('US','FR','CL')
+        ORDER BY country ASC, year ASC
+        "#,
+    )
+    .fetch_all(&state.names_db)
+    .await
+    .context("load country_last5_year")?;
+
+    let mut out = BTreeMap::<String, Vec<i64>>::new();
+    for r in rows {
+        let country: String = r.try_get("country")?;
+        let year: i64 = r.try_get("year")?;
+        out.entry(country).or_default().push(year);
+    }
+    Ok(out)
+}
+
 #[debug_handler]
 pub(crate) async fn get(
     State(state): State<AppState>,
@@ -710,6 +733,7 @@ async fn get_impl(
             .unwrap_or_default(),
     };
     let last5_year_ranks = last5_year_ranks_materialized(state, kind, card_key).await?;
+    let last5_years = country_last5_years(state).await?;
 
     Ok(CardDetailsResponse {
         card_key: card_key.to_string(),
@@ -721,6 +745,7 @@ async fn get_impl(
         sex_split,
         all_spellings,
         within_concept_variants,
+        last5_years,
         last5_year_ranks,
     })
 }

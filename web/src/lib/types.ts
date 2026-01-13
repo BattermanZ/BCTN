@@ -33,6 +33,7 @@ export type Card = {
   >;
   all_spellings?: string[];
   within_concept_variants?: string[];
+  last5_years?: Partial<Record<CountryCode, number[]>>;
   last5_year_ranks?: Partial<Record<CountryCode, Array<{ year: number; rank: number }>>>;
 };
 

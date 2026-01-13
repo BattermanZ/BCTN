@@ -106,6 +106,7 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
         DELETE FROM variant_group_member;
         DELETE FROM variant_group;
         DELETE FROM card_rank_last5;
+        DELETE FROM country_last5_year;
         DELETE FROM card_spelling_subset_top;
         DELETE FROM card_spelling_total_all;
         DELETE FROM card_spelling_country_total;
@@ -157,6 +158,29 @@ pub(super) fn run_materialize(args: VariantsMaterializeArgs) -> Result<()> {
         started.elapsed().as_millis(),
         count_rows(&tx, "card_rank_last5")?
     );
+
+    // Persist the last-5-year window per country for the UI (so we can show missing years as "-").
+    for country in ["US", "FR", "CL"] {
+        let mut stmt = tx.prepare(
+            r#"
+            SELECT DISTINCT year
+            FROM name_observation
+            WHERE run_id = ?1 AND country = ?2
+            ORDER BY year DESC
+            LIMIT 5
+            "#,
+        )?;
+        let years: Vec<i64> = stmt
+            .query_map(params![run_id, country], |r| r.get::<_, i64>(0))?
+            .map(|r| r.unwrap())
+            .collect();
+        for year in years {
+            tx.execute(
+                "INSERT OR IGNORE INTO country_last5_year (country, year) VALUES (?1, ?2)",
+                params![country, year],
+            )?;
+        }
+    }
 
     let commit_started = Instant::now();
     tx.commit()?;
