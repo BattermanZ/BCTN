@@ -79,9 +79,15 @@ fn client_id_from_headers(headers: &HeaderMap) -> String {
 
 fn normalize_host(host: &str) -> String {
     let host = host.split(',').next().unwrap_or(host).trim().to_lowercase();
-    if host.starts_with('[') {
-        return host;
+
+    // IPv6 hosts are bracketed in URLs / Host headers: `[::1]:443`.
+    // Normalize by stripping any port while preserving the bracketed address.
+    if let Some(rest) = host.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        return format!("[{}]", &rest[..end]);
     }
+
     host.split(':').next().unwrap_or(&host).to_string()
 }
 
@@ -110,8 +116,8 @@ pub(crate) fn ensure_same_origin(state: &AppState, headers: &HeaderMap) -> Resul
         .unwrap_or(&origin)
         .split('/')
         .next()
-        .unwrap_or("")
-        .to_lowercase();
+        .unwrap_or("");
+    let origin_host = normalize_host(origin_host);
 
     let host = request_host(headers).unwrap_or_default();
     if origin_host.is_empty() || host.is_empty() {
