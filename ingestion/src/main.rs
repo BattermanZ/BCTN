@@ -3,6 +3,7 @@ mod db;
 mod ingestion;
 mod normalize;
 mod query;
+mod rebuild_all;
 
 use anyhow::Result;
 use clap::Parser;
@@ -13,6 +14,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Ingest(args) => ingestion::ingest::run(args),
+        Command::RebuildAll(args) => rebuild_all::run(args),
         Command::Search(args) => query::run_search(args),
         Command::Show(args) => query::run_show(args),
         Command::Top(args) => query::run_top(args),

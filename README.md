@@ -8,6 +8,9 @@ Builds `data/bctn.sqlite` from the source files in `database_source/`:
 
 ```sh
 cargo run -p bctn-ingest --release -- ingest --out data/bctn.sqlite --start-year 2005 --end-year 2024
+
+# Full rebuild (re-ingest + Wikidata + ensemble auto-accept + materialize)
+cargo run -p bctn-ingest --release -- rebuild-all --out data/bctn.sqlite --max-concepts 10000 --cache-path data/wikidata_cache.json --min-ensemble-score 0.90
 ```
 
 ## Browse/search (CLI)

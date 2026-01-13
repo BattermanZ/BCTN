@@ -12,6 +12,7 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     Ingest(IngestArgs),
+    RebuildAll(RebuildAllArgs),
     Search(SearchArgs),
     Show(ShowArgs),
     Top(TopArgs),
@@ -41,6 +42,49 @@ pub(crate) struct IngestArgs {
 
     #[arg(long, default_value_t = 2024)]
     pub(crate) end_year: i32,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct RebuildAllArgs {
+    #[arg(long, default_value = "database_source")]
+    pub(crate) database_source_dir: PathBuf,
+
+    #[arg(long, default_value = "data/bctn.sqlite")]
+    pub(crate) out: PathBuf,
+
+    #[arg(long, default_value_t = 2005)]
+    pub(crate) start_year: i32,
+
+    #[arg(long, default_value_t = 2024)]
+    pub(crate) end_year: i32,
+
+    /// Max number of concepts for Wikidata + ensemble steps.
+    #[arg(long, default_value_t = 10000)]
+    pub(crate) max_concepts: u32,
+
+    /// Cached Wikidata search results (reused across rebuilds).
+    #[arg(long, default_value = "data/wikidata_cache.json")]
+    pub(crate) cache_path: PathBuf,
+
+    /// Refresh Wikidata cache entries (slower, uses network).
+    #[arg(long)]
+    pub(crate) refresh_cache: bool,
+
+    /// Sleep between Wikidata requests (ms).
+    #[arg(long, default_value_t = 500)]
+    pub(crate) request_sleep_ms: u64,
+
+    /// Search batch size for Wikidata queries.
+    #[arg(long, default_value_t = 50)]
+    pub(crate) batch_size: u32,
+
+    /// Emit progress to stderr every N search terms / entity batches (0 disables).
+    #[arg(long, default_value_t = 50)]
+    pub(crate) progress_every: u32,
+
+    /// Auto-accept ensemble edges at or above this score; below is set to ignored.
+    #[arg(long, default_value_t = 0.90)]
+    pub(crate) min_ensemble_score: f64,
 }
 
 #[derive(Debug, Parser)]
