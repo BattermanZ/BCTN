@@ -7,6 +7,7 @@ use axum_extra::extract::CookieJar;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::collections::HashSet;
 
 use crate::state::{AppState, CountryTotals};
 
@@ -283,57 +284,68 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
             .context("load best_pick_mode")?
             .unwrap_or(0);
 
-    let candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
-    let mut candidates = load_candidates(state, user_id, candidate_limit).await?;
+    let base_candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
 
-    candidates.retain(|c| {
-        let totals = state.country_total_births;
+    let mut candidates = Vec::<CandidateCard>::new();
+    let mut candidate_limit = base_candidate_limit;
+    for _attempt in 0..4 {
+        candidates = load_candidates(state, user_id, candidate_limit).await?;
+        candidates.retain(|c| {
+            let totals = state.country_total_births;
 
-        let by_country = |country: &str| -> (f64, bool, &CountryStats) {
-            match country {
-                "US" => (ppm(c.us.total, totals.us_total), c.us.top100_any, &c.us),
-                "FR" => (ppm(c.fr.total, totals.fr_total), c.fr.top100_any, &c.fr),
-                "CL" => (ppm(c.cl.total, totals.cl_total), c.cl.top100_any, &c.cl),
-                _ => (0.0, false, &c.us),
-            }
-        };
+            let by_country = |country: &str| -> (f64, bool, &CountryStats) {
+                match country {
+                    "US" => (ppm(c.us.total, totals.us_total), c.us.top100_any, &c.us),
+                    "FR" => (ppm(c.fr.total, totals.fr_total), c.fr.top100_any, &c.fr),
+                    "CL" => (ppm(c.cl.total, totals.cl_total), c.cl.top100_any, &c.cl),
+                    _ => (0.0, false, &c.us),
+                }
+            };
 
-        let mut has_any = false;
-        let mut passes_any_pop = false;
-        let mut passes_any_gender = false;
-        let mut passes_any_non_extra = false;
+            let mut has_any = false;
+            let mut passes_any_pop = false;
+            let mut passes_any_gender = false;
+            let mut passes_any_non_extra = false;
 
-        for &country in &selected_countries {
-            let (p, top, stats) = by_country(country);
-            if stats.total > 0 {
-                has_any = true;
+            for &country in &selected_countries {
+                let (p, top, stats) = by_country(country);
+                if stats.total > 0 {
+                    has_any = true;
+                }
+                if matches_pop(pop, p, top) {
+                    passes_any_pop = true;
+                }
+                if p >= 75.0 {
+                    passes_any_non_extra = true;
+                }
+                let gl = gender_label(stats.male, stats.female);
+                if matches_gender(gender, &gl) {
+                    passes_any_gender = true;
+                }
             }
-            if matches_pop(pop, p, top) {
-                passes_any_pop = true;
-            }
-            if p >= 75.0 {
-                passes_any_non_extra = true;
-            }
-            let gl = gender_label(stats.male, stats.female);
-            if matches_gender(gender, &gl) {
-                passes_any_gender = true;
-            }
-        }
 
-        if !has_any {
-            return false;
+            if !has_any {
+                return false;
+            }
+            if !include_extra_rare && !passes_any_non_extra {
+                return false;
+            }
+            if !passes_any_pop {
+                return false;
+            }
+            if !passes_any_gender {
+                return false;
+            }
+            true
+        });
+
+        if !candidates.is_empty() {
+            break;
         }
-        if !include_extra_rare && !passes_any_non_extra {
-            return false;
-        }
-        if !passes_any_pop {
-            return false;
-        }
-        if !passes_any_gender {
-            return false;
-        }
-        true
-    });
+        // We may have filtered out most of the top `candidate_limit` rows (due to swipes and/or
+        // narrow filters). Increase the scan window so we can still find remaining candidates.
+        candidate_limit = (candidate_limit * 3).min(200_000);
+    }
 
     if candidates.is_empty() {
         bail!("no matching names left (try broader filters)");
@@ -397,6 +409,22 @@ async fn next_impl(state: &AppState, jar: &CookieJar, q: FeedQuery) -> Result<Fe
 }
 
 async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<Vec<CandidateCard>> {
+    // `swipe` lives in the app DB (state.db), not the names DB (state.names_db). We need to
+    // filter out swiped cards after reading candidates from the names DB.
+    //
+    // Important: because we can't filter in SQL on the names DB connection, we must query with
+    // enough headroom. Otherwise, if the user swipes a lot of popular names, we could end up
+    // with "no matching names left" even though there are plenty lower in the global ordering.
+    let swiped: Vec<String> = sqlx::query_scalar("SELECT card_key FROM swipe WHERE user_id = ?1")
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await
+        .context("load swiped card keys")?;
+    let swiped_set: HashSet<String> = swiped.into_iter().collect();
+    let query_limit = limit
+        .saturating_add(swiped_set.len().try_into().unwrap_or(0))
+        .saturating_add(200);
+
     let rows = sqlx::query(
         r#"
         WITH cards AS (
@@ -462,7 +490,7 @@ async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<V
         LIMIT ?1
         "#,
     )
-    .bind(limit)
+    .bind(query_limit)
     .fetch_all(&state.names_db)
     .await
     .context("load candidates from names db (run `bctn-ingest variants materialize` if missing)")?;
@@ -500,14 +528,7 @@ async fn load_candidates(state: &AppState, user_id: i64, limit: i64) -> Result<V
         });
     }
 
-    // `swipe` lives in the app DB (state.db), not the names DB (state.names_db). Filter in Rust.
-    let swiped: Vec<String> = sqlx::query_scalar("SELECT card_key FROM swipe WHERE user_id = ?1")
-        .bind(user_id)
-        .fetch_all(&state.db)
-        .await
-        .context("load swiped card keys")?;
-    if !swiped.is_empty() {
-        let swiped_set: std::collections::HashSet<String> = swiped.into_iter().collect();
+    if !swiped_set.is_empty() {
         out.retain(|c| !swiped_set.contains(&c.card_key));
     }
 

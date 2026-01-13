@@ -7,6 +7,7 @@
   import { filters, settings, swipes } from '$lib/stores/app';
   import { goto } from '$app/navigation';
   import { fade } from 'svelte/transition';
+  import { untrack } from 'svelte';
 
   let deck = $state<Card[]>([]);
   let showAllSpellings = $state(false);
@@ -14,6 +15,8 @@
   let loading = $state(false);
   let loadError = $state<string | null>(null);
   let detailsLoading = $state(false);
+
+  let feedGen = $state(0);
 
   let dragging = $state(false);
   let activePointerId = $state<number | null>(null);
@@ -42,21 +45,32 @@
   const topY = $derived(dragging ? dy : animating ? animY : 0);
   const topRotate = $derived(topX / 18);
 
+  const activeFeedKey = $derived(
+    `${$settings.bestPickMode ? 1 : 0}|${$filters.countries.join(',')}|${$filters.popularity}|${
+      $filters.includeExtraRare ? 1 : 0
+    }|${$filters.gender}`
+  );
+  let lastFeedKey = $state<string | null>(null);
+
   async function refillDeck() {
     if (loading) return;
     loadError = null;
     loading = true;
+    const gen = feedGen;
     try {
       while (deck.length < 3) {
+        if (gen != feedGen) return;
         const next = await api.feedNext({
           countries: $filters.countries.join(','),
           pop: $filters.popularity,
           include_extra_rare: $filters.includeExtraRare,
           gender: $filters.gender,
         });
+        if (gen != feedGen) return;
         deck = [...deck, next];
       }
     } catch (e) {
+      if (gen != feedGen) return;
       const status = (e as { status?: number } | null)?.status;
       if (status === 401) {
         await goto('/login');
@@ -64,37 +78,29 @@
       }
       loadError = (e as Error | null)?.message ?? 'Failed to load names';
     } finally {
-      loading = false;
+      if (gen == feedGen) loading = false;
     }
   }
 
   function resetDeck() {
+    feedGen += 1;
     resetDrag();
     resetAnimation();
     flipped = false;
     showAllSpellings = false;
     history = [];
     deck = [];
+    loading = false;
+    detailsLoading = false;
     void refillDeck();
   }
 
   $effect(() => {
-    // restart the feed when filters change (per product decision)
-    void $filters;
-    resetDeck();
-  });
-
-  let lastBestPick = $state<boolean | null>(null);
-  $effect(() => {
-    const bp = $settings.bestPickMode;
-    if (lastBestPick === null) {
-      lastBestPick = bp;
-      return;
-    }
-    if (bp !== lastBestPick) {
-      lastBestPick = bp;
-      resetDeck();
-    }
+    const key = activeFeedKey;
+    if (lastFeedKey === key) return;
+    lastFeedKey = key;
+    // restart the feed when filters/best-pick change (per product decision)
+    untrack(() => resetDeck());
   });
 
   async function ensureTopDetails(card: Card) {
@@ -419,12 +425,19 @@
 </script>
 
 {#if !topCard}
-  <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-center">
-    <div class="text-lg font-semibold">No more names</div>
-    <div class="mt-2 text-sm text-zinc-600">
-      Try broadening filters (countries, gender, popularity) to keep exploring.
+  {#if loading}
+    <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-center">
+      <div class="text-lg font-semibold">Loading…</div>
+      <div class="mt-2 text-sm text-zinc-600">Fetching more names.</div>
     </div>
-  </div>
+  {:else}
+    <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-center">
+      <div class="text-lg font-semibold">No more names</div>
+      <div class="mt-2 text-sm text-zinc-600">
+        Try broadening filters (countries, gender, popularity) to keep exploring.
+      </div>
+    </div>
+  {/if}
 {:else}
   <div class="flex flex-col gap-4">
     <div class="flex items-center justify-between">

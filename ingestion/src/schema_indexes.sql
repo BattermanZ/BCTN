@@ -5,6 +5,9 @@ CREATE INDEX IF NOT EXISTS idx_name_concept_member_name_string ON name_concept_m
 
 CREATE INDEX IF NOT EXISTS idx_name_observation_country_year ON name_observation(country, year);
 CREATE INDEX IF NOT EXISTS idx_name_observation_name_string ON name_observation(name_string_id);
+-- Speeds backend spellings preview queries (join on name_string_id with run_id/country filters).
+CREATE INDEX IF NOT EXISTS idx_name_observation_name_string_run_country
+  ON name_observation(name_string_id, run_id, country);
 CREATE INDEX IF NOT EXISTS idx_name_observation_year ON name_observation(year);
 CREATE INDEX IF NOT EXISTS idx_name_observation_name_raw ON name_observation(name_raw);
 
