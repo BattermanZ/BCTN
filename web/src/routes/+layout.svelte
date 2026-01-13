@@ -57,7 +57,13 @@
 </script>
 
 <svelte:head>
+  <title>BCTN</title>
   <link rel="icon" href={favicon} />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="BCTN" />
   <meta name="theme-color" content="#ffffff" />
 </svelte:head>
 
