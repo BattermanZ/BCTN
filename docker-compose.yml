@@ -15,6 +15,8 @@ services:
       BCTN_STATIC_DIR: /app/web/build
       BCTN_COOKIE_SECURE: "true"
       BCTN_PUBLIC_HOST: bctn.battercloud.cc
+      BCTN_BOOTSTRAP_ADMIN_USERNAME: admin
+      BCTN_BOOTSTRAP_ADMIN_PASSWORD: password123
     read_only: true
     tmpfs:
       - /tmp
