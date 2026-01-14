@@ -2,14 +2,15 @@
   import SwipeDeck from '$lib/components/SwipeDeck.svelte';
 </script>
 
-<header class="flex items-center justify-between">
-  <div>
-    <h1 class="text-xl font-semibold tracking-tight">BCTN</h1>
-    <div class="mt-1 truncate text-sm text-zinc-600">Binational Committee for the Twins Names</div>
-    <div class="mt-1 text-sm text-zinc-600">Swipe names. Match with your partner.</div>
+<header class="pt-2">
+  <h1 class="text-2xl font-semibold tracking-tight text-zinc-900">BCTN</h1>
+  <div class="mt-1 text-sm leading-snug text-zinc-600">
+    Binational Committee for the Twins Names
   </div>
 </header>
 
 <div class="mt-4">
   <SwipeDeck />
 </div>
+
+<div class="mt-4 text-center text-sm text-zinc-500">Swipe names. Match with your partner.</div>
