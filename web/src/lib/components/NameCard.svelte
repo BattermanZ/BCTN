@@ -78,15 +78,10 @@
 
   const tintRgb = $derived(tintRgbForGender(gender.gender));
 
-  const partnerBorder = $derived(() => {
-    if (card.partner_action === 'superlike') return 'border-amber-400 ring-amber-200/60';
-    if (card.partner_action === 'like') return 'border-emerald-400 ring-emerald-200/60';
-    return 'border-zinc-200 ring-transparent';
-  });
 </script>
 
 <div
-  class={`relative overflow-hidden rounded-3xl border-2 bg-white shadow-sm ring-2 ${partnerBorder} ${className}`}
+  class={`relative overflow-hidden rounded-3xl border-2 border-zinc-200 bg-white shadow-sm ${className}`}
 >
   <div
     class="pointer-events-none absolute inset-0"

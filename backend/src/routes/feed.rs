@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Json, debug_handler};
 use axum_extra::extract::CookieJar;
+use rand::Rng;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -349,12 +350,17 @@ async fn next_impl(
             .context("load best_pick_mode")?
             .unwrap_or(0);
 
-    if let Some((kind, card_key, partner_action)) = load_partner_priority(state, user_id).await? {
-        let candidate = load_candidate_for_key(state, kind, &card_key).await?;
-        let mut resp =
-            build_response(state, &candidate, &selected_countries, best_pick_mode != 0).await?;
-        resp.partner_action = Some(partner_action);
-        return Ok((jar, resp));
+    // Sprinkle partner-liked cards near the top of the deck, without clustering them at the very
+    // top. This keeps them "close to the top" on average while preserving randomness.
+    if let Some((kind, card_key)) = load_partner_priority(state, user_id).await? {
+        let mut rng = rand::rngs::OsRng;
+        if rng.gen_ratio(1, 5) {
+            let candidate = load_candidate_for_key(state, kind, &card_key).await?;
+            let mut resp =
+                build_response(state, &candidate, &selected_countries, best_pick_mode != 0).await?;
+            resp.partner_action = None;
+            return Ok((jar, resp));
+        }
     }
 
     let base_candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
@@ -414,6 +420,14 @@ async fn next_impl(
     }
 
     if candidates.is_empty() {
+        // If filters are so narrow we have no base candidates, still allow partner-liked cards.
+        if let Some((kind, card_key)) = load_partner_priority(state, user_id).await? {
+            let candidate = load_candidate_for_key(state, kind, &card_key).await?;
+            let mut resp =
+                build_response(state, &candidate, &selected_countries, best_pick_mode != 0).await?;
+            resp.partner_action = None;
+            return Ok((jar, resp));
+        }
         bail!("no matching names left (try broader filters)");
     }
 
@@ -453,22 +467,18 @@ async fn batch_impl(
     let limit = q.limit.unwrap_or(10).clamp(1, 25);
     let base_candidate_limit = if best_pick_mode != 0 { 20000 } else { 3000 };
 
-    let mut out = Vec::with_capacity(limit as usize);
+    let mut rng = rand::rngs::OsRng;
+
     let priority = load_partner_priority_batch(state, user_id, limit).await?;
     let mut priority_keys = HashSet::<String>::new();
     for p in &priority {
         priority_keys.insert(p.card_key.clone());
     }
+    let mut priority_cards: Vec<CandidateCard> = Vec::new();
     for p in priority {
-        let candidate = load_candidate_for_key(state, p.kind, &p.card_key).await?;
-        let mut resp =
-            build_response(state, &candidate, &selected_countries, best_pick_mode != 0).await?;
-        resp.partner_action = Some(p.partner_action);
-        out.push(resp);
-        if out.len() >= limit as usize {
-            return Ok((jar, out));
-        }
+        priority_cards.push(load_candidate_for_key(state, p.kind, &p.card_key).await?);
     }
+    priority_cards.shuffle(&mut rng);
 
     let mut candidates = Vec::<CandidateCard>::new();
     let mut candidate_limit = base_candidate_limit;
@@ -527,10 +537,13 @@ async fn batch_impl(
     }
 
     if candidates.is_empty() {
-        bail!("no matching names left (try broader filters)");
+        // If filters are so narrow we have no base candidates, still allow partner-liked cards.
+        if priority_cards.is_empty() {
+            bail!("no matching names left (try broader filters)");
+        }
     }
 
-    let chosen: Vec<CandidateCard> = if best_pick_mode != 0 {
+    let mut base_cards: Vec<CandidateCard> = if best_pick_mode != 0 {
         let mut v = candidates;
         v.sort_by_key(|c| {
             Reverse(score_best_picks(
@@ -540,19 +553,42 @@ async fn batch_impl(
                 c.cl,
             ))
         });
-        v.into_iter()
-            .take(limit.saturating_sub(out.len() as i64) as usize)
-            .collect()
+        v
     } else {
-        let mut rng = rand::rngs::OsRng;
         let mut v = candidates;
         v.shuffle(&mut rng);
-        v.into_iter()
-            .take(limit.saturating_sub(out.len() as i64) as usize)
-            .collect()
+        v
     };
 
-    for c in chosen {
+    // Merge base candidates with partner-liked cards, biasing partner cards toward earlier
+    // positions without making them predictable (no fixed "every 5th card" pattern).
+    let mut merged: Vec<CandidateCard> = Vec::with_capacity(limit as usize);
+    for i in 0..(limit as usize) {
+        let p = if i < 10 {
+            0.20
+        } else if i < 20 {
+            0.10
+        } else {
+            0.05
+        };
+        let pick_partner = !priority_cards.is_empty() && rng.gen_bool(p);
+
+        let next = if pick_partner {
+            priority_cards.pop()
+        } else {
+            base_cards.pop()
+        }
+        .or_else(|| base_cards.pop())
+        .or_else(|| priority_cards.pop());
+
+        let Some(c) = next else {
+            break;
+        };
+        merged.push(c);
+    }
+
+    let mut out = Vec::with_capacity(merged.len());
+    for c in merged {
         let mut resp = build_response(state, &c, &selected_countries, best_pick_mode != 0).await?;
         resp.partner_action = None;
         out.push(resp);
@@ -621,7 +657,6 @@ async fn build_response(
 struct PartnerPriority {
     kind: CardKind,
     card_key: String,
-    partner_action: String,
 }
 
 async fn partner_user_id(state: &AppState, user_id: i64) -> Result<Option<i64>> {
@@ -646,14 +681,14 @@ fn parse_card_kind(s: &str) -> Result<CardKind> {
 async fn load_partner_priority(
     state: &AppState,
     user_id: i64,
-) -> Result<Option<(CardKind, String, String)>> {
+) -> Result<Option<(CardKind, String)>> {
     let Some(partner_id) = partner_user_id(state, user_id).await? else {
         return Ok(None);
     };
 
     let row = sqlx::query(
         r#"
-        SELECT s.card_key, s.card_kind, s.action
+        SELECT s.card_key, s.card_kind
         FROM swipe s
         WHERE s.user_id = ?1
           AND s.action IN ('like','superlike')
@@ -673,9 +708,8 @@ async fn load_partner_priority(
     };
     let card_key: String = row.try_get("card_key")?;
     let card_kind: String = row.try_get("card_kind")?;
-    let action: String = row.try_get("action")?;
     let kind = parse_card_kind(&card_kind)?;
-    Ok(Some((kind, card_key, action)))
+    Ok(Some((kind, card_key)))
 }
 
 async fn load_partner_priority_batch(
@@ -689,7 +723,7 @@ async fn load_partner_priority_batch(
 
     let rows = sqlx::query(
         r#"
-        SELECT s.card_key, s.card_kind, s.action
+        SELECT s.card_key, s.card_kind
         FROM swipe s
         WHERE s.user_id = ?1
           AND s.action IN ('like','superlike')
@@ -709,11 +743,9 @@ async fn load_partner_priority_batch(
     for r in rows {
         let card_key: String = r.try_get("card_key")?;
         let card_kind: String = r.try_get("card_kind")?;
-        let action: String = r.try_get("action")?;
         out.push(PartnerPriority {
             kind: parse_card_kind(&card_kind)?,
             card_key,
-            partner_action: action,
         });
     }
     Ok(out)
