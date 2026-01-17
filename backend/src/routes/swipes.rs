@@ -214,9 +214,10 @@ async fn update_impl(
     let mut tx = state.db.begin().await.context("begin swipe update tx")?;
 
     let updated =
-        sqlx::query("UPDATE swipe SET action=?1, created_at=?2 WHERE user_id=?3 AND card_key=?4")
+        // Keep `created_at` stable so Deck "Undo" doesn't unexpectedly remove an update action
+        // (e.g. turning a like into a nope), which would allow the card to reappear.
+        sqlx::query("UPDATE swipe SET action=?1 WHERE user_id=?2 AND card_key=?3")
             .bind(&req.action)
-            .bind(now)
             .bind(user_id)
             .bind(&req.card_key)
             .execute(&mut *tx)

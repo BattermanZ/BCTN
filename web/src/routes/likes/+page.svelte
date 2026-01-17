@@ -62,9 +62,6 @@
       selected = null;
       selectedRef = null;
       await load();
-      if (segment === 'likes' || segment === 'superlikes') {
-        // Keep the current segment; the updated card may move between segments.
-      }
     } catch (e) {
       const status = (e as { status?: number } | null)?.status;
       if (status === 401) {
