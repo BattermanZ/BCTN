@@ -56,9 +56,15 @@
     if (!selectedRef) return;
     try {
       await api.updateSwipe({ card_key: selectedRef.card_key, action });
-      sheetOpen = false;
-      selected = null;
-      selectedRef = null;
+      if (action === 'nope') {
+        sheetOpen = false;
+        selected = null;
+        selectedRef = null;
+        await load();
+        return;
+      }
+
+      selectedRef = { ...selectedRef, my_action: action };
       await load();
     } catch (e) {
       const status = (e as { status?: number } | null)?.status;
