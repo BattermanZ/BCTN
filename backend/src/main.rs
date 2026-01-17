@@ -7,9 +7,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use axum::body::Body;
 use axum::http::HeaderName;
 use axum::http::HeaderValue;
+use axum::http::Request;
 use axum::http::header;
+use axum::middleware::Next;
+use axum::response::Response;
 use clap::Parser;
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
@@ -49,6 +53,20 @@ struct Args {
     /// Password for `--bootstrap-admin-username` (min 8 chars).
     #[arg(long, env = "BCTN_BOOTSTRAP_ADMIN_PASSWORD")]
     bootstrap_admin_password: Option<String>,
+}
+
+async fn no_store_html(req: Request<Body>, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let is_html = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"));
+    if is_html {
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    resp
 }
 
 #[tokio::main]
@@ -91,6 +109,7 @@ async fn main() -> Result<()> {
     let static_service = ServeDir::new(&args.static_dir).append_index_html_on_directories(true);
     let mut app = router(state)
         .nest_service("/", static_service)
+        .layer(axum::middleware::from_fn(no_store_html))
         .layer(TraceLayer::new_for_http())
         .layer(SetResponseHeaderLayer::overriding(
             header::X_CONTENT_TYPE_OPTIONS,
