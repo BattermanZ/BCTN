@@ -28,6 +28,19 @@ pub(crate) struct CreateSwipeResponse {
     match_created: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateSwipeRequest {
+    card_key: String,
+    action: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct UpdateSwipeResponse {
+    status: String,
+    match_created: bool,
+    match_removed: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct UndoSwipeResponse {
     status: String,
@@ -164,6 +177,104 @@ async fn create_impl(
         CreateSwipeResponse {
             status: "ok".to_string(),
             match_created,
+        },
+    ))
+}
+
+#[debug_handler]
+pub(crate) async fn update(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(req): Json<UpdateSwipeRequest>,
+) -> impl IntoResponse {
+    if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
+        tracing::warn!(error=%err, "csrf_blocked");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match update_impl(&state, jar, req).await {
+        Ok((jar, resp)) => (jar, Json(resp)).into_response(),
+        Err(err) => {
+            tracing::warn!(error=%err, "update_swipe_failed");
+            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+        }
+    }
+}
+
+async fn update_impl(
+    state: &AppState,
+    jar: CookieJar,
+    req: UpdateSwipeRequest,
+) -> Result<(CookieJar, UpdateSwipeResponse)> {
+    validate_action(&req.action)?;
+    let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
+    let partner_id = partner_user_id(state, user_id).await?;
+
+    let now = now_ts();
+    let mut tx = state.db.begin().await.context("begin swipe update tx")?;
+
+    let updated =
+        sqlx::query("UPDATE swipe SET action=?1, created_at=?2 WHERE user_id=?3 AND card_key=?4")
+            .bind(&req.action)
+            .bind(now)
+            .bind(user_id)
+            .bind(&req.card_key)
+            .execute(&mut *tx)
+            .await
+            .context("update swipe")?
+            .rows_affected();
+    if updated == 0 {
+        bail!("no existing swipe for card_key");
+    }
+
+    let like_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT user_id)
+        FROM swipe
+        WHERE card_key=?1
+          AND user_id IN (?2, ?3)
+          AND action IN ('like','superlike')
+        "#,
+    )
+    .bind(&req.card_key)
+    .bind(user_id)
+    .bind(partner_id)
+    .fetch_one(&mut *tx)
+    .await
+    .context("count mutual likes")?;
+
+    let mut match_created = false;
+    let mut match_removed = false;
+    if like_count == 2 {
+        let res =
+            sqlx::query("INSERT OR IGNORE INTO name_match (card_key, created_at) VALUES (?1, ?2)")
+                .bind(&req.card_key)
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .context("insert match")?;
+        if res.rows_affected() > 0 {
+            match_created = true;
+        }
+    } else {
+        let res = sqlx::query("DELETE FROM name_match WHERE card_key=?1")
+            .bind(&req.card_key)
+            .execute(&mut *tx)
+            .await
+            .context("delete match")?;
+        if res.rows_affected() > 0 {
+            match_removed = true;
+        }
+    }
+
+    tx.commit().await.context("commit swipe update tx")?;
+
+    Ok((
+        jar,
+        UpdateSwipeResponse {
+            status: "ok".to_string(),
+            match_created,
+            match_removed,
         },
     ))
 }

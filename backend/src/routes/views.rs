@@ -14,6 +14,7 @@ pub(crate) struct CardRef {
     card_key: String,
     card_kind: String,
     display_name: String,
+    my_action: String,
 }
 
 async fn kind_for_key(state: &AppState, card_key: &str) -> Result<&'static str> {
@@ -43,11 +44,12 @@ async fn display_name(state: &AppState, card_key: &str) -> Result<String> {
     Ok(clean_spelling_display(&name))
 }
 
-async fn card_ref(state: &AppState, card_key: &str) -> Result<CardRef> {
+async fn card_ref(state: &AppState, card_key: &str, my_action: &str) -> Result<CardRef> {
     Ok(CardRef {
         card_key: card_key.to_string(),
         card_kind: kind_for_key(state, card_key).await?.to_string(),
         display_name: display_name(state, card_key).await?,
+        my_action: my_action.to_string(),
     })
 }
 
@@ -60,15 +62,23 @@ pub(crate) async fn matches(State(state): State<AppState>, jar: CookieJar) -> im
 }
 
 async fn matches_impl(state: &AppState, jar: CookieJar) -> Result<(CookieJar, Vec<CardRef>)> {
-    let (jar, _user_id, _is_admin) = super::auth::require_session_user_ready(state, jar).await?;
-    let rows: Vec<String> =
-        sqlx::query_scalar("SELECT card_key FROM name_match ORDER BY created_at DESC")
-            .fetch_all(&state.db)
-            .await
-            .context("load matches")?;
+    let (jar, user_id, _is_admin) = super::auth::require_session_user_ready(state, jar).await?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT m.card_key, s.action AS my_action
+        FROM name_match m
+        JOIN swipe s ON s.user_id = ?1 AND s.card_key = m.card_key
+        WHERE s.action IN ('like','superlike')
+        ORDER BY m.created_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .context("load matches")?;
     let mut out = Vec::new();
-    for k in rows {
-        out.push(card_ref(state, &k).await?);
+    for (k, my_action) in rows {
+        out.push(card_ref(state, &k, &my_action).await?);
     }
     Ok((jar, out))
 }
@@ -92,7 +102,7 @@ async fn likes_impl(state: &AppState, jar: CookieJar) -> Result<(CookieJar, Vec<
     .context("load likes")?;
     let mut out = Vec::new();
     for k in rows {
-        out.push(card_ref(state, &k).await?);
+        out.push(card_ref(state, &k, "like").await?);
     }
     Ok((jar, out))
 }
@@ -116,7 +126,7 @@ async fn superlikes_impl(state: &AppState, jar: CookieJar) -> Result<(CookieJar,
     .context("load superlikes")?;
     let mut out = Vec::new();
     for k in rows {
-        out.push(card_ref(state, &k).await?);
+        out.push(card_ref(state, &k, "superlike").await?);
     }
     Ok((jar, out))
 }

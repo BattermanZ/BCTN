@@ -57,13 +57,19 @@ export type SwipeCreateRequest = {
 };
 
 export type SwipeCreateResponse = { status: string; match_created: boolean };
+export type SwipeUpdateResponse = { status: string; match_created: boolean; match_removed: boolean };
 export type SwipeUndoResponse = {
   status: string;
   undone: null | { card_key: string; action: SwipeAction };
   match_removed: boolean;
 };
 
-export type CardRef = { card_key: string; card_kind: 'group' | 'concept'; display_name: string };
+export type CardRef = {
+  card_key: string;
+  card_kind: 'group' | 'concept';
+  display_name: string;
+  my_action: 'like' | 'superlike';
+};
 
 export type AdminUserRow = {
   id: number;
@@ -166,6 +172,13 @@ export const api = {
     return await apiFetch<SwipeCreateResponse>('/api/swipes', {
       method: 'POST',
       body: JSON.stringify({ ...req, action: req.action }),
+    });
+  },
+
+  async updateSwipe(req: { card_key: string; action: SwipeAction }): Promise<SwipeUpdateResponse> {
+    return await apiFetch<SwipeUpdateResponse>('/api/swipes/update', {
+      method: 'POST',
+      body: JSON.stringify(req),
     });
   },
 
