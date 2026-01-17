@@ -553,6 +553,8 @@ async fn batch_impl(
                 c.cl,
             ))
         });
+        // We later consume with `pop()`, so reverse to make `pop()` take the best scores first.
+        v.reverse();
         v
     } else {
         let mut v = candidates;
