@@ -6,11 +6,12 @@
 
   const tabs = [
     { href: '/', label: 'Deck', icon: 'deck' },
+    { href: '/explore', label: 'Explore', icon: 'explore' },
     { href: '/matches', label: 'Matches', icon: 'matches' },
     { href: '/likes', label: 'Likes', icon: 'likes' },
     { href: '/settings', label: 'Settings', icon: 'settings' },
   ] as const satisfies readonly {
-    href: '/' | '/matches' | '/likes' | '/settings';
+    href: '/' | '/explore' | '/matches' | '/likes' | '/settings';
     label: string;
     icon: IconName;
   }[];

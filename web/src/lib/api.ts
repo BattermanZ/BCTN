@@ -71,6 +71,15 @@ export type CardRef = {
   my_action: 'like' | 'superlike';
 };
 
+export type ExploreCard = {
+  card_key: string;
+  card_kind: 'group' | 'concept';
+  display_name: string;
+  per_country: Array<{ country: string; ppm: number; top100_any: boolean; gender: string }>;
+  my_action?: SwipeAction;
+  max_ppm?: number;
+};
+
 export type AdminUserRow = {
   id: number;
   username: string;
@@ -196,6 +205,38 @@ export const api = {
 
   async superlikes(): Promise<CardRef[]> {
     return await apiFetch<CardRef[]>('/api/superlikes');
+  },
+
+  async exploreSearch(opts: {
+    q: string;
+    countries: string;
+    gender: string;
+    page: number;
+    page_size: number;
+  }): Promise<ExploreCard[]> {
+    const params = new URLSearchParams({
+      q: opts.q,
+      countries: opts.countries,
+      gender: opts.gender,
+      page: String(opts.page),
+      page_size: String(opts.page_size),
+    });
+    return await apiFetch<ExploreCard[]>(`/api/explore/search?${params.toString()}`);
+  },
+
+  async exploreTop(opts: {
+    countries: string;
+    gender: string;
+    page: number;
+    page_size: number;
+  }): Promise<ExploreCard[]> {
+    const params = new URLSearchParams({
+      countries: opts.countries,
+      gender: opts.gender,
+      page: String(opts.page),
+      page_size: String(opts.page_size),
+    });
+    return await apiFetch<ExploreCard[]>(`/api/explore/top?${params.toString()}`);
   },
 
   async adminUsers(): Promise<AdminUserRow[]> {

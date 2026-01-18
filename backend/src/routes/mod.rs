@@ -1,6 +1,7 @@
 pub(crate) mod admin;
 pub(crate) mod auth;
 pub(crate) mod card;
+pub(crate) mod explore;
 pub(crate) mod feed;
 pub(crate) mod settings;
 pub(crate) mod swipes;
@@ -67,6 +68,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/matches", get(views::matches))
         .route("/api/likes", get(views::likes))
         .route("/api/superlikes", get(views::superlikes))
+        .route("/api/explore/search", get(explore::search))
+        .route("/api/explore/top", get(explore::top))
         .route("/api/card/:card_key", get(card::get))
         .route(
             "/api/settings",
