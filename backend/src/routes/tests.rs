@@ -31,12 +31,24 @@ async fn create_min_names_db(path: &std::path::Path) {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "CREATE TABLE variant_group_country_window_total (variant_group_key TEXT NOT NULL, country TEXT NOT NULL, male INTEGER NOT NULL, female INTEGER NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("CREATE TABLE name_string (id INTEGER PRIMARY KEY, display TEXT NOT NULL)")
         .execute(&pool)
         .await
         .unwrap();
     sqlx::query(
         "CREATE TABLE name_concept (id INTEGER PRIMARY KEY, concept_key TEXT NOT NULL UNIQUE, preferred_name_string_id INTEGER NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE concept_country_window_total (concept_id INTEGER NOT NULL, country TEXT NOT NULL, male INTEGER NOT NULL, female INTEGER NOT NULL)",
     )
     .execute(&pool)
     .await
@@ -57,6 +69,12 @@ async fn create_min_names_db(path: &std::path::Path) {
         .unwrap();
     sqlx::query(
         "INSERT INTO name_concept (id, concept_key, preferred_name_string_id) VALUES (1, 'kyara', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO concept_country_window_total (concept_id, country, male, female) VALUES (1, 'US', 10, 0), (1, 'FR', 10, 0), (1, 'CL', 10, 0)",
     )
     .execute(&pool)
     .await

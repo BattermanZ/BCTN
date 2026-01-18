@@ -69,6 +69,7 @@ export type CardRef = {
   card_kind: 'group' | 'concept';
   display_name: string;
   my_action: 'like' | 'superlike';
+  gender: 'unisex' | 'mostly_male' | 'mostly_female' | 'male' | 'female' | 'unknown';
 };
 
 export type ExploreCard = {

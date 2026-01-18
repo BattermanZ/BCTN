@@ -12,10 +12,22 @@
   let segment = $state<Segment>('likes');
   let sheetOpen = $state(false);
   let refs = $state<CardRef[]>([]);
+  let filterMale = $state(false);
+  let filterFemale = $state(false);
   let selectedRef = $state<CardRef | null>(null);
   let selected = $state<Card | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
+
+  function matchesGender(ref: CardRef): boolean {
+    if (filterMale === filterFemale) return true; // both or neither => Any
+    if (filterMale) {
+      return ref.gender === 'male' || ref.gender === 'mostly_male' || ref.gender === 'unisex';
+    }
+    return ref.gender === 'female' || ref.gender === 'mostly_female' || ref.gender === 'unisex';
+  }
+
+  const shownRefs = $derived(refs.filter(matchesGender));
 
   async function load() {
     loading = true;
@@ -94,7 +106,7 @@
     <h1 class="text-xl font-semibold tracking-tight">Likes</h1>
     <div class="mt-1 text-sm text-zinc-600">Your likes & super-likes.</div>
   </div>
-  <Badge tone={segment === 'likes' ? 'teal' : 'amber'} label={`${refs.length}`} />
+  <Badge tone={segment === 'likes' ? 'teal' : 'amber'} label={`${shownRefs.length}`} />
 </header>
 
 <div class="mt-4">
@@ -120,6 +132,34 @@
   </div>
 </div>
 
+<div class="mt-4">
+  <div class="flex flex-wrap items-center gap-2">
+    <button
+      type="button"
+      class={`rounded-full border px-3 py-2 text-sm font-semibold ${
+        filterMale
+          ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+          : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
+      }`}
+      onclick={() => (filterMale = !filterMale)}
+    >
+      Male
+    </button>
+    <button
+      type="button"
+      class={`rounded-full border px-3 py-2 text-sm font-semibold ${
+        filterFemale
+          ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+          : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
+      }`}
+      onclick={() => (filterFemale = !filterFemale)}
+    >
+      Female
+    </button>
+    <div class="text-xs text-zinc-500">Unisex appears in both.</div>
+  </div>
+</div>
+
 <div class="mt-4 space-y-3">
   {#if error}
     <div class="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-800">
@@ -129,12 +169,12 @@
     <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700">
       Loading…
     </div>
-  {:else if refs.length === 0}
+  {:else if shownRefs.length === 0}
     <div class="rounded-3xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700">
-      Nothing here yet.
+      Nothing here for this filter.
     </div>
   {:else}
-    {#each refs as ref (ref.card_key)}
+    {#each shownRefs as ref (ref.card_key)}
       <button
         type="button"
         class="w-full rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-sm hover:bg-zinc-50"
