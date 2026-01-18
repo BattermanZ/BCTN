@@ -20,7 +20,7 @@
 
   // Search
   let q = $state('');
-  let reloadTimer = $state<number | null>(null);
+  let reloadTimer: number | null = null;
 
   // Data
   let items = $state<ExploreCard[]>([]);
