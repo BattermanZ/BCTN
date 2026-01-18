@@ -7,6 +7,7 @@ use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use crate::display::clean_spelling_display;
 use crate::state::AppState;
@@ -524,10 +525,31 @@ pub(crate) async fn search(
     jar: CookieJar,
     Query(q): Query<ExploreSearchQuery>,
 ) -> impl IntoResponse {
+    let started = Instant::now();
+    let q_preview = q.q.as_deref().unwrap_or("");
+    tracing::info!(
+        q_len = q_preview.chars().count(),
+        page = q.page.unwrap_or(0),
+        page_size = q.page_size.unwrap_or(50),
+        countries = q.countries.as_deref().unwrap_or(""),
+        gender = q.gender.as_deref().unwrap_or(""),
+        "explore_search_start"
+    );
     match search_impl(&state, jar, q).await {
-        Ok((jar, out)) => (jar, Json(out)).into_response(),
+        Ok((jar, out)) => {
+            tracing::info!(
+                results = out.len(),
+                elapsed_ms = started.elapsed().as_millis(),
+                "explore_search_done"
+            );
+            (jar, Json(out)).into_response()
+        }
         Err(err) => {
             tracing::warn!(error=%err, "explore_search_failed");
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "explore_search_done"
+            );
             (status_code_for_explore_error(&err), err.to_string()).into_response()
         }
     }
@@ -620,10 +642,29 @@ pub(crate) async fn top(
     jar: CookieJar,
     Query(q): Query<ExploreTopQuery>,
 ) -> impl IntoResponse {
+    let started = Instant::now();
+    tracing::info!(
+        page = q.page.unwrap_or(0),
+        page_size = q.page_size.unwrap_or(100),
+        countries = q.countries.as_deref().unwrap_or(""),
+        gender = q.gender.as_deref().unwrap_or(""),
+        "explore_top_start"
+    );
     match top_impl(&state, jar, q).await {
-        Ok((jar, out)) => (jar, Json(out)).into_response(),
+        Ok((jar, out)) => {
+            tracing::info!(
+                results = out.len(),
+                elapsed_ms = started.elapsed().as_millis(),
+                "explore_top_done"
+            );
+            (jar, Json(out)).into_response()
+        }
         Err(err) => {
             tracing::warn!(error=%err, "explore_top_failed");
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "explore_top_done"
+            );
             (status_code_for_explore_error(&err), err.to_string()).into_response()
         }
     }
