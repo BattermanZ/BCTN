@@ -618,9 +618,12 @@ async fn search_impl(
     });
 
     let start = (page * page_size) as usize;
-    let end = start.saturating_add(page_size as usize);
     let slice = scored.into_iter().map(|(_, _, c)| c).collect::<Vec<_>>();
-    let page_rows = slice.get(start..end).unwrap_or(&[]);
+    let page_rows = slice
+        .iter()
+        .skip(start)
+        .take(page_size as usize)
+        .collect::<Vec<_>>();
 
     if page_rows.is_empty() {
         tracing::info!(
