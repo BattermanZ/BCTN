@@ -552,7 +552,7 @@ pub(crate) async fn search(
 ) -> impl IntoResponse {
     let started = Instant::now();
     let q_preview = q.q.as_deref().unwrap_or("");
-    tracing::info!(
+    tracing::debug!(
         q_len = q_preview.chars().count(),
         page = q.page.unwrap_or(0),
         page_size = q.page_size.unwrap_or(50),
@@ -562,7 +562,7 @@ pub(crate) async fn search(
     );
     match search_impl(&state, jar, q).await {
         Ok((jar, out)) => {
-            tracing::info!(
+            tracing::debug!(
                 results = out.len(),
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_search_done"
@@ -571,7 +571,7 @@ pub(crate) async fn search(
         }
         Err(err) => {
             tracing::warn!(error=%err, "explore_search_failed");
-            tracing::info!(
+            tracing::debug!(
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_search_done"
             );
@@ -652,7 +652,7 @@ async fn search_impl(
     };
 
     if page_rows.is_empty() {
-        tracing::info!(
+        tracing::debug!(
             q_len = q_folded.chars().count(),
             scored = slice.len(),
             candidates = seen.len(),
@@ -689,7 +689,7 @@ pub(crate) async fn top(
     Query(q): Query<ExploreTopQuery>,
 ) -> impl IntoResponse {
     let started = Instant::now();
-    tracing::info!(
+    tracing::debug!(
         page = q.page.unwrap_or(0),
         page_size = q.page_size.unwrap_or(100),
         countries = q.countries.as_deref().unwrap_or(""),
@@ -698,7 +698,7 @@ pub(crate) async fn top(
     );
     match top_impl(&state, jar, q).await {
         Ok((jar, out)) => {
-            tracing::info!(
+            tracing::debug!(
                 results = out.len(),
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_top_done"
@@ -707,7 +707,7 @@ pub(crate) async fn top(
         }
         Err(err) => {
             tracing::warn!(error=%err, "explore_top_failed");
-            tracing::info!(
+            tracing::debug!(
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_top_done"
             );
