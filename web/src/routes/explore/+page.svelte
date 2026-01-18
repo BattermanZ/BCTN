@@ -151,7 +151,7 @@
     }
 
     clearResults();
-    void loadPage(0);
+    queueMicrotask(() => void loadPage(0));
   });
 
   async function open(ref: ExploreCard) {
