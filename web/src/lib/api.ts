@@ -76,6 +76,7 @@ export type ExploreCard = {
   card_kind: 'group' | 'concept';
   display_name: string;
   per_country: Array<{ country: string; ppm: number; top100_any: boolean; gender: string }>;
+  my_action?: SwipeAction;
   max_ppm?: number;
 };
 

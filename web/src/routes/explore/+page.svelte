@@ -183,6 +183,10 @@
 
   async function setAction(action: SwipeAction) {
     if (!selectedRef) return;
+    if (selectedRef.my_action === action) {
+      closeSheet();
+      return;
+    }
     try {
       const createRes = await api.createSwipe({
         card_key: selectedRef.card_key,
@@ -192,8 +196,10 @@
       if (createRes.status === 'already_swiped') {
         await api.updateSwipe({ card_key: selectedRef.card_key, action });
       }
-      // Remove from list so it won't appear again in Explore.
-      items = items.filter((x) => x.card_key !== selectedRef!.card_key);
+      selectedRef = { ...selectedRef, my_action: action };
+      items = items.map((x) =>
+        x.card_key === selectedRef!.card_key ? { ...x, my_action: action } : x
+      );
       closeSheet();
     } catch (e) {
       const status = (e as { status?: number } | null)?.status;

@@ -6,7 +6,7 @@ use axum::{Json, debug_handler};
 use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::display::clean_spelling_display;
 use crate::state::AppState;
@@ -34,6 +34,8 @@ pub(crate) struct ExploreCard {
     card_kind: String,
     display_name: String,
     per_country: Vec<CountrySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    my_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_ppm: Option<f64>,
 }
@@ -242,16 +244,17 @@ fn matches_gender_any_selected(filter: GenderFilter, r: &CardStatsRow, selected:
     false
 }
 
-async fn load_swiped_keys_for_candidates(
+async fn load_my_actions_for_candidates(
     state: &AppState,
     user_id: i64,
     keys: &[String],
-) -> Result<HashSet<String>> {
+) -> Result<HashMap<String, String>> {
     if keys.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(HashMap::new());
     }
 
-    let mut q = String::from("SELECT card_key FROM swipe WHERE user_id = ?1 AND card_key IN (");
+    let mut q =
+        String::from("SELECT card_key, action FROM swipe WHERE user_id = ?1 AND card_key IN (");
     for i in 0..keys.len() {
         if i > 0 {
             q.push(',');
@@ -261,16 +264,23 @@ async fn load_swiped_keys_for_candidates(
     }
     q.push(')');
 
-    let mut query = sqlx::query_scalar(&q).bind(user_id);
+    let mut query = sqlx::query(&q).bind(user_id);
     for k in keys {
         query = query.bind(k);
     }
 
-    let rows: Vec<String> = query
+    let rows = query
         .fetch_all(&state.db)
         .await
-        .context("load swiped keys for candidates")?;
-    Ok(rows.into_iter().collect())
+        .context("load my actions for candidates")?;
+
+    let mut out = HashMap::new();
+    for r in rows {
+        let card_key: String = r.try_get("card_key")?;
+        let action: String = r.try_get("action")?;
+        out.insert(card_key, action);
+    }
+    Ok(out)
 }
 
 fn status_code_for_explore_error(err: &anyhow::Error) -> StatusCode {
@@ -542,13 +552,6 @@ async fn search_impl(
     let page = q.page.unwrap_or(0).max(0);
 
     let mut candidates = load_search_candidates(state, &q_folded, 1000).await?;
-    let candidate_keys = candidates
-        .iter()
-        .map(|c| c.card_key.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let swiped_set = load_swiped_keys_for_candidates(state, user_id, &candidate_keys).await?;
 
     // Fuzzy scoring: prefer prefix matches, then small edit distance on folded keys.
     let max_dist = if q_folded.len() <= 4 { 1 } else { 2 };
@@ -556,9 +559,6 @@ async fn search_impl(
     let mut seen = HashSet::<String>::new();
     for c in candidates.drain(..) {
         if !seen.insert(c.card_key.clone()) {
-            continue;
-        }
-        if swiped_set.contains(&c.card_key) {
             continue;
         }
         if !matches_gender_any_selected(gender, &c, &selected_countries) {
@@ -592,6 +592,12 @@ async fn search_impl(
     let slice = scored.into_iter().map(|(_, _, c)| c).collect::<Vec<_>>();
     let page_rows = slice.get(start..end).unwrap_or(&[]);
 
+    let keys = page_rows
+        .iter()
+        .map(|c| c.card_key.clone())
+        .collect::<Vec<_>>();
+    let my_actions = load_my_actions_for_candidates(state, user_id, &keys).await?;
+
     let mut out = Vec::with_capacity(page_rows.len());
     for r in page_rows {
         let per_country = build_country_summaries(state, r);
@@ -601,6 +607,7 @@ async fn search_impl(
             card_kind: r.card_kind.clone(),
             display_name: clean_spelling_display(&r.display_name),
             per_country,
+            my_action: my_actions.get(&r.card_key).cloned(),
             max_ppm: Some(max_ppm),
         });
     }
@@ -634,10 +641,10 @@ async fn top_impl(
     let page_size = q.page_size.unwrap_or(100).clamp(1, 500);
     let page = q.page.unwrap_or(0).max(0);
 
-    let mut out = Vec::with_capacity(page_size as usize);
+    let mut rows_out = Vec::with_capacity(page_size as usize);
     let mut offset = page * page_size;
     let mut attempts = 0;
-    while out.len() < page_size as usize && attempts < 6 {
+    while rows_out.len() < page_size as usize && attempts < 6 {
         attempts += 1;
         let chunk =
             load_top_candidates_ordered(state, offset, page_size * 5, &selected_countries).await?;
@@ -645,28 +652,36 @@ async fn top_impl(
             break;
         }
         offset += page_size * 5;
-        let chunk_keys = chunk.iter().map(|c| c.card_key.clone()).collect::<Vec<_>>();
-        let swiped_set = load_swiped_keys_for_candidates(state, user_id, &chunk_keys).await?;
         for r in chunk {
-            if swiped_set.contains(&r.card_key) {
-                continue;
-            }
             if !matches_gender_any_selected(gender, &r, &selected_countries) {
                 continue;
             }
-            let per_country = build_country_summaries(state, &r);
-            let max_ppm = max_ppm_for_selected(state, &r, &selected_countries);
-            out.push(ExploreCard {
-                card_key: r.card_key,
-                card_kind: r.card_kind,
-                display_name: clean_spelling_display(&r.display_name),
-                per_country,
-                max_ppm: Some(max_ppm),
-            });
-            if out.len() >= page_size as usize {
+            rows_out.push(r);
+            if rows_out.len() >= page_size as usize {
                 break;
             }
         }
+    }
+
+    let keys = rows_out
+        .iter()
+        .map(|c| c.card_key.clone())
+        .collect::<Vec<_>>();
+    let my_actions = load_my_actions_for_candidates(state, user_id, &keys).await?;
+
+    let mut out = Vec::with_capacity(rows_out.len());
+    for r in rows_out {
+        let my_action = my_actions.get(&r.card_key).cloned();
+        let per_country = build_country_summaries(state, &r);
+        let max_ppm = max_ppm_for_selected(state, &r, &selected_countries);
+        out.push(ExploreCard {
+            card_key: r.card_key,
+            card_kind: r.card_kind,
+            display_name: clean_spelling_display(&r.display_name),
+            per_country,
+            my_action,
+            max_ppm: Some(max_ppm),
+        });
     }
 
     Ok((jar, out))
