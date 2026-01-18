@@ -6,7 +6,7 @@ use axum::{Json, debug_handler};
 use axum_extra::extract::CookieJar;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::display::clean_spelling_display;
 use crate::state::AppState;
@@ -34,8 +34,6 @@ pub(crate) struct ExploreCard {
     card_kind: String,
     display_name: String,
     per_country: Vec<CountrySummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    my_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_ppm: Option<f64>,
 }
@@ -244,16 +242,16 @@ fn matches_gender_any_selected(filter: GenderFilter, r: &CardStatsRow, selected:
     false
 }
 
-async fn load_my_actions(
+async fn load_swiped_keys_for_candidates(
     state: &AppState,
     user_id: i64,
     keys: &[String],
-) -> Result<HashMap<String, String>> {
+) -> Result<HashSet<String>> {
     if keys.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(HashSet::new());
     }
-    let mut q =
-        String::from("SELECT card_key, action FROM swipe WHERE user_id = ?1 AND card_key IN (");
+
+    let mut q = String::from("SELECT card_key FROM swipe WHERE user_id = ?1 AND card_key IN (");
     for i in 0..keys.len() {
         if i > 0 {
             q.push(',');
@@ -263,22 +261,24 @@ async fn load_my_actions(
     }
     q.push(')');
 
-    let mut query = sqlx::query(&q).bind(user_id);
+    let mut query = sqlx::query_scalar(&q).bind(user_id);
     for k in keys {
         query = query.bind(k);
     }
 
-    let rows = query
+    let rows: Vec<String> = query
         .fetch_all(&state.db)
         .await
-        .context("load my actions")?;
-    let mut out = HashMap::new();
-    for r in rows {
-        let card_key: String = r.try_get("card_key")?;
-        let action: String = r.try_get("action")?;
-        out.insert(card_key, action);
+        .context("load swiped keys for candidates")?;
+    Ok(rows.into_iter().collect())
+}
+
+fn status_code_for_explore_error(err: &anyhow::Error) -> StatusCode {
+    match err.to_string().as_str() {
+        "missing session" | "invalid session" => StatusCode::UNAUTHORIZED,
+        "invalid origin" | "invalid host" | "cross-origin request blocked" => StatusCode::FORBIDDEN,
+        _ => StatusCode::BAD_REQUEST,
     }
-    Ok(out)
 }
 
 async fn load_search_candidates(
@@ -518,7 +518,7 @@ pub(crate) async fn search(
         Ok((jar, out)) => (jar, Json(out)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "explore_search_failed");
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            (status_code_for_explore_error(&err), err.to_string()).into_response()
         }
     }
 }
@@ -529,12 +529,6 @@ async fn search_impl(
     q: ExploreSearchQuery,
 ) -> Result<(CookieJar, Vec<ExploreCard>)> {
     let (jar, user_id, _) = super::auth::require_session_user_ready(state, jar).await?;
-    let swiped: Vec<String> = sqlx::query_scalar("SELECT card_key FROM swipe WHERE user_id = ?1")
-        .bind(user_id)
-        .fetch_all(&state.db)
-        .await
-        .context("load swiped for explore search")?;
-    let swiped_set: HashSet<String> = swiped.into_iter().collect();
     let selected_countries = parse_countries(q.countries)?;
     let gender = parse_gender(q.gender)?;
 
@@ -548,6 +542,13 @@ async fn search_impl(
     let page = q.page.unwrap_or(0).max(0);
 
     let mut candidates = load_search_candidates(state, &q_folded, 1000).await?;
+    let candidate_keys = candidates
+        .iter()
+        .map(|c| c.card_key.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let swiped_set = load_swiped_keys_for_candidates(state, user_id, &candidate_keys).await?;
 
     // Fuzzy scoring: prefer prefix matches, then small edit distance on folded keys.
     let max_dist = if q_folded.len() <= 4 { 1 } else { 2 };
@@ -591,12 +592,6 @@ async fn search_impl(
     let slice = scored.into_iter().map(|(_, _, c)| c).collect::<Vec<_>>();
     let page_rows = slice.get(start..end).unwrap_or(&[]);
 
-    let keys = page_rows
-        .iter()
-        .map(|c| c.card_key.clone())
-        .collect::<Vec<_>>();
-    let my_actions = load_my_actions(state, user_id, &keys).await?;
-
     let mut out = Vec::with_capacity(page_rows.len());
     for r in page_rows {
         let per_country = build_country_summaries(state, r);
@@ -606,7 +601,6 @@ async fn search_impl(
             card_kind: r.card_kind.clone(),
             display_name: clean_spelling_display(&r.display_name),
             per_country,
-            my_action: my_actions.get(&r.card_key).cloned(),
             max_ppm: Some(max_ppm),
         });
     }
@@ -623,7 +617,7 @@ pub(crate) async fn top(
         Ok((jar, out)) => (jar, Json(out)).into_response(),
         Err(err) => {
             tracing::warn!(error=%err, "explore_top_failed");
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            (status_code_for_explore_error(&err), err.to_string()).into_response()
         }
     }
 }
@@ -640,13 +634,6 @@ async fn top_impl(
     let page_size = q.page_size.unwrap_or(100).clamp(1, 500);
     let page = q.page.unwrap_or(0).max(0);
 
-    let swiped: Vec<String> = sqlx::query_scalar("SELECT card_key FROM swipe WHERE user_id = ?1")
-        .bind(user_id)
-        .fetch_all(&state.db)
-        .await
-        .context("load swiped for explore top")?;
-    let swiped_set: HashSet<String> = swiped.into_iter().collect();
-
     let mut out = Vec::with_capacity(page_size as usize);
     let mut offset = page * page_size;
     let mut attempts = 0;
@@ -658,6 +645,8 @@ async fn top_impl(
             break;
         }
         offset += page_size * 5;
+        let chunk_keys = chunk.iter().map(|c| c.card_key.clone()).collect::<Vec<_>>();
+        let swiped_set = load_swiped_keys_for_candidates(state, user_id, &chunk_keys).await?;
         for r in chunk {
             if swiped_set.contains(&r.card_key) {
                 continue;
@@ -672,7 +661,6 @@ async fn top_impl(
                 card_kind: r.card_kind,
                 display_name: clean_spelling_display(&r.display_name),
                 per_country,
-                my_action: None,
                 max_ppm: Some(max_ppm),
             });
             if out.len() >= page_size as usize {

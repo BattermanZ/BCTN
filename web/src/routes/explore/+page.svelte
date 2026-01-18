@@ -20,7 +20,7 @@
 
   // Search
   let q = $state('');
-  let searchTimer = $state<number | null>(null);
+  let reloadTimer = $state<number | null>(null);
 
   // Data
   let items = $state<ExploreCard[]>([]);
@@ -127,33 +127,31 @@
   }
 
   function scheduleSearch() {
-    if (searchTimer) window.clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(() => {
-      clearResults();
-      void loadPage(0);
-    }, 250);
+    if (reloadTimer) window.clearTimeout(reloadTimer);
+    const query = q.trim();
+    clearResults();
+    if (query.length < 2) {
+      items = [];
+      hasMore = false;
+      return;
+    }
+    reloadTimer = window.setTimeout(() => void loadPage(0), 250);
   }
 
   $effect(() => {
     void selectedCountries;
     void gender;
-    clearResults();
-    void loadPage(0);
-  });
-
-  $effect(() => {
     void mode;
-    clearResults();
-    if (mode === 'search') {
-      if (q.trim().length < 2) return;
-    }
-    void loadPage(0);
-  });
-
-  $effect(() => {
-    if (mode !== 'search') return;
     void q;
-    scheduleSearch();
+
+    if (reloadTimer) window.clearTimeout(reloadTimer);
+    if (mode === 'search') {
+      scheduleSearch();
+      return;
+    }
+
+    clearResults();
+    void loadPage(0);
   });
 
   async function open(ref: ExploreCard) {
@@ -419,4 +417,3 @@
     {/if}
   {/if}
 </BottomSheet>
-
