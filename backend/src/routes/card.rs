@@ -673,7 +673,11 @@ pub(crate) async fn get(
     match get_impl(&state, jar, &card_key, q).await {
         Ok((jar, v)) => (jar, Json(v)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "card_get_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not load name details. If this is a new names database, run `bctn-ingest variants materialize`.",
+                "card_get_failed"
+            );
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
         }
     }

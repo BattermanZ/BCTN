@@ -570,7 +570,11 @@ pub(crate) async fn search(
             (jar, Json(out)).into_response()
         }
         Err(err) => {
-            tracing::warn!(error=%err, "explore_search_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Explore search failed. Try adjusting filters or searching a shorter name.",
+                "explore_search_failed"
+            );
             tracing::debug!(
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_search_done"
@@ -706,7 +710,11 @@ pub(crate) async fn top(
             (jar, Json(out)).into_response()
         }
         Err(err) => {
-            tracing::warn!(error=%err, "explore_top_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not load top names. Try adjusting filters or try again.",
+                "explore_top_failed"
+            );
             tracing::debug!(
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_top_done"

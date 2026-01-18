@@ -183,7 +183,11 @@ pub(crate) async fn require_session_user(
             .execute(&state.db)
             .await
     {
-        tracing::warn!(error=%err, "session_last_seen_update_failed");
+        tracing::warn!(
+            error=%err,
+            user_msg="Could not update session activity timestamp. The user may be asked to log in again later.",
+            "session_last_seen_update_failed"
+        );
     }
 
     let remaining = expires_at - now;
@@ -198,7 +202,11 @@ pub(crate) async fn require_session_user(
                 .execute(&state.db)
                 .await
         {
-            tracing::warn!(error=%err, "session_expires_update_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not extend session expiry. The user may be asked to log in again later.",
+                "session_expires_update_failed"
+            );
         }
 
         let cookie = Cookie::build((SESSION_COOKIE, token))
@@ -251,14 +259,22 @@ pub(crate) async fn login(
     let client_id = client_id_from_headers(&headers);
     let key = format!("{}:{}", client_id, req.username.trim().to_lowercase());
     if state.login_limiter.record_and_is_limited(&key, now).await {
-        tracing::warn!(client_id=%client_id, "login_rate_limited");
+        tracing::warn!(
+            client_id=%client_id,
+            user_msg="Too many login attempts from this client. Please wait and try again.",
+            "login_rate_limited"
+        );
         return (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response();
     }
 
     match login_impl(&state, jar, req).await {
         Ok(resp) => resp.into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "login_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Login failed. Check username and password and try again.",
+                "login_failed"
+            );
             (StatusCode::UNAUTHORIZED, "invalid credentials").into_response()
         }
     }
@@ -422,13 +438,21 @@ pub(crate) async fn change_password(
     Json(req): Json<ChangePasswordRequest>,
 ) -> impl IntoResponse {
     if let Err(err) = ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     match change_password_impl(&state, jar, req).await {
         Ok(jar) => (jar, StatusCode::NO_CONTENT).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "change_password_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not change password. Check the requirements and try again.",
+                "change_password_failed"
+            );
             StatusCode::BAD_REQUEST.into_response()
         }
     }

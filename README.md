@@ -161,6 +161,16 @@ Bootstrap behavior:
 
 Example `.env` template: `.env.example`
 
+## Logging
+
+The backend logs to stdout/stderr (so `docker compose logs` shows everything).
+
+The main knob is `RUST_LOG` (see `.env.example` for presets). Common values:
+
+- Normal (recommended): `RUST_LOG=info,tower_http=info,sqlx=warn`
+- Quiet (less SQL noise): `RUST_LOG=info,tower_http=info,sqlx=error`
+- Troubleshooting (very verbose): `RUST_LOG=debug,tower_http=info,sqlx=warn`
+
 ## Running in Docker (production-like)
 
 This repo includes a distroless Docker build that bakes the names DB into the image and bind-mounts the app DB directory.

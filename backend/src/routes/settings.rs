@@ -65,13 +65,21 @@ pub(crate) async fn patch_settings(
     Json(req): Json<PatchSettingsRequest>,
 ) -> impl IntoResponse {
     if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     match patch_settings_impl(&state, jar, req).await {
         Ok((jar, settings)) => (jar, Json(settings)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "patch_settings_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not update settings. Try again.",
+                "patch_settings_failed"
+            );
             StatusCode::BAD_REQUEST.into_response()
         }
     }

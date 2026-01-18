@@ -311,7 +311,11 @@ pub(crate) async fn next(
     match next_impl(&state, jar, q).await {
         Ok((jar, card)) => (jar, Json(card)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "feed_next_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not load the next name. If this is a new names database, run `bctn-ingest variants materialize`.",
+                "feed_next_failed"
+            );
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
         }
     }
@@ -326,7 +330,11 @@ pub(crate) async fn batch(
     match batch_impl(&state, jar, q).await {
         Ok((jar, cards)) => (jar, Json(cards)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "feed_batch_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not load names for the deck. If this is a new names database, run `bctn-ingest variants materialize`.",
+                "feed_batch_failed"
+            );
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
         }
     }

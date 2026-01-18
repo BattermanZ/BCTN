@@ -104,7 +104,11 @@ pub(crate) async fn create_user(
     Json(req): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
     if let Err(err) = crate::routes::auth::ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
@@ -114,7 +118,11 @@ pub(crate) async fn create_user(
     match create_user_impl(&state, req).await {
         Ok(user) => (jar, (StatusCode::CREATED, Json(user))).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "create_user_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not create the user account. Check the username/password rules and try again.",
+                "create_user_failed"
+            );
             StatusCode::BAD_REQUEST.into_response()
         }
     }
@@ -181,7 +189,11 @@ pub(crate) async fn update_user(
     Json(req): Json<UpdateUserRequest>,
 ) -> impl IntoResponse {
     if let Err(err) = crate::routes::auth::ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
@@ -191,7 +203,11 @@ pub(crate) async fn update_user(
     match update_user_impl(&state, id, req).await {
         Ok(user) => (jar, Json(user)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "update_user_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not update the user account. Check the values and try again.",
+                "update_user_failed"
+            );
             StatusCode::BAD_REQUEST.into_response()
         }
     }
@@ -302,7 +318,11 @@ pub(crate) async fn delete_user(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     if let Err(err) = crate::routes::auth::ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     let Ok((jar, _admin_user_id)) = require_admin(&state, jar).await else {
@@ -312,7 +332,11 @@ pub(crate) async fn delete_user(
     match delete_user_impl(&state, id).await {
         Ok(()) => (jar, StatusCode::NO_CONTENT).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "delete_user_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not delete the user account. Try again.",
+                "delete_user_failed"
+            );
             StatusCode::BAD_REQUEST.into_response()
         }
     }

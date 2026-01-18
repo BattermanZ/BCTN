@@ -87,13 +87,21 @@ pub(crate) async fn create(
     Json(req): Json<CreateSwipeRequest>,
 ) -> impl IntoResponse {
     if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     match create_impl(&state, jar, req).await {
         Ok((jar, resp)) => (jar, Json(resp)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "create_swipe_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not record the swipe. Try again.",
+                "create_swipe_failed"
+            );
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
         }
     }
@@ -189,13 +197,21 @@ pub(crate) async fn update(
     Json(req): Json<UpdateSwipeRequest>,
 ) -> impl IntoResponse {
     if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     match update_impl(&state, jar, req).await {
         Ok((jar, resp)) => (jar, Json(resp)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "update_swipe_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not update the swipe. Try again.",
+                "update_swipe_failed"
+            );
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
         }
     }
@@ -287,13 +303,21 @@ pub(crate) async fn undo(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if let Err(err) = super::auth::ensure_same_origin(&state, &headers) {
-        tracing::warn!(error=%err, "csrf_blocked");
+        tracing::warn!(
+            error=%err,
+            user_msg="Request blocked for security reasons (origin check failed).",
+            "csrf_blocked"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     match undo_impl(&state, jar).await {
         Ok((jar, resp)) => (jar, Json(resp)).into_response(),
         Err(err) => {
-            tracing::warn!(error=%err, "undo_swipe_failed");
+            tracing::warn!(
+                error=%err,
+                user_msg="Could not undo the last swipe. Try again.",
+                "undo_swipe_failed"
+            );
             (StatusCode::BAD_REQUEST, err.to_string()).into_response()
         }
     }
