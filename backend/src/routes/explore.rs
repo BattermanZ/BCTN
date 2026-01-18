@@ -617,13 +617,14 @@ async fn search_impl(
             .then(a.2.card_key.cmp(&b.2.card_key))
     });
 
-    let start = (page * page_size) as usize;
     let slice = scored.into_iter().map(|(_, _, c)| c).collect::<Vec<_>>();
-    let page_rows = slice
-        .iter()
-        .skip(start)
-        .take(page_size as usize)
-        .collect::<Vec<_>>();
+    let start = (page as usize).saturating_mul(page_size as usize);
+    let end = start.saturating_add(page_size as usize).min(slice.len());
+    let page_rows = if start >= slice.len() {
+        &[] as &[CardStatsRow]
+    } else {
+        &slice[start..end]
+    };
 
     if page_rows.is_empty() {
         tracing::info!(
