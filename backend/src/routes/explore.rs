@@ -37,6 +37,8 @@ pub(crate) struct ExploreCard {
     per_country: Vec<CountrySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     my_action: Option<String>,
+    // Note: `max_ppm` is a legacy field name; it now represents the *combined* ppm across
+    // the selected countries (sum totals / sum births), not the max of any single country.
     #[serde(skip_serializing_if = "Option::is_none")]
     max_ppm: Option<f64>,
 }
@@ -212,19 +214,28 @@ fn build_country_summaries(state: &AppState, r: &CardStatsRow) -> Vec<CountrySum
     ]
 }
 
-fn max_ppm_for_selected(state: &AppState, r: &CardStatsRow, selected: &[&str]) -> f64 {
+fn combined_ppm_for_selected(state: &AppState, r: &CardStatsRow, selected: &[&str]) -> f64 {
     let totals = state.country_total_births;
-    let mut best: f64 = 0.0;
+    let mut total: i64 = 0;
+    let mut births: i64 = 0;
     for &c in selected {
-        let p = match c {
-            "US" => ppm(r.us_total, totals.us_total),
-            "FR" => ppm(r.fr_total, totals.fr_total),
-            "CL" => ppm(r.cl_total, totals.cl_total),
-            _ => 0.0,
-        };
-        best = best.max(p);
+        match c {
+            "US" => {
+                total = total.saturating_add(r.us_total);
+                births = births.saturating_add(totals.us_total);
+            }
+            "FR" => {
+                total = total.saturating_add(r.fr_total);
+                births = births.saturating_add(totals.fr_total);
+            }
+            "CL" => {
+                total = total.saturating_add(r.cl_total);
+                births = births.saturating_add(totals.cl_total);
+            }
+            _ => {}
+        }
     }
-    best
+    ppm(total, births)
 }
 
 fn matches_gender_any_selected(filter: GenderFilter, r: &CardStatsRow, selected: &[&str]) -> bool {
@@ -470,11 +481,25 @@ async fn load_top_candidates_ordered(
         ranked AS (
           SELECT
             *,
-            max(
-              CASE WHEN ?1 != 0 THEN (us_total * 1000000.0 / ?4) ELSE 0 END,
-              CASE WHEN ?2 != 0 THEN (fr_total * 1000000.0 / ?5) ELSE 0 END,
-              CASE WHEN ?3 != 0 THEN (cl_total * 1000000.0 / ?6) ELSE 0 END
-            ) AS max_ppm
+            CASE
+              WHEN (
+                (CASE WHEN ?1 != 0 THEN ?4 ELSE 0 END) +
+                (CASE WHEN ?2 != 0 THEN ?5 ELSE 0 END) +
+                (CASE WHEN ?3 != 0 THEN ?6 ELSE 0 END)
+              ) > 0
+              THEN (
+                (
+                  (CASE WHEN ?1 != 0 THEN us_total ELSE 0 END) +
+                  (CASE WHEN ?2 != 0 THEN fr_total ELSE 0 END) +
+                  (CASE WHEN ?3 != 0 THEN cl_total ELSE 0 END)
+                ) * 1000000.0 / (
+                  (CASE WHEN ?1 != 0 THEN ?4 ELSE 0 END) +
+                  (CASE WHEN ?2 != 0 THEN ?5 ELSE 0 END) +
+                  (CASE WHEN ?3 != 0 THEN ?6 ELSE 0 END)
+                )
+              )
+              ELSE 0
+            END AS max_ppm -- combined ppm across selected countries (legacy field name)
           FROM cards
         )
         SELECT * FROM ranked
@@ -610,8 +635,8 @@ async fn search_impl(
         a.0.cmp(&b.0)
             .then(a.1.cmp(&b.1))
             .then_with(|| {
-                let ap = max_ppm_for_selected(state, &a.2, &selected_countries);
-                let bp = max_ppm_for_selected(state, &b.2, &selected_countries);
+                let ap = combined_ppm_for_selected(state, &a.2, &selected_countries);
+                let bp = combined_ppm_for_selected(state, &b.2, &selected_countries);
                 bp.partial_cmp(&ap).unwrap_or(std::cmp::Ordering::Equal)
             })
             .then(a.2.card_key.cmp(&b.2.card_key))
@@ -644,14 +669,14 @@ async fn search_impl(
     let mut out = Vec::with_capacity(page_rows.len());
     for r in page_rows {
         let per_country = build_country_summaries(state, r);
-        let max_ppm = max_ppm_for_selected(state, r, &selected_countries);
+        let combined_ppm = combined_ppm_for_selected(state, r, &selected_countries);
         out.push(ExploreCard {
             card_key: r.card_key.clone(),
             card_kind: r.card_kind.clone(),
             display_name: clean_spelling_display(&r.display_name),
             per_country,
             my_action: my_actions.get(&r.card_key).cloned(),
-            max_ppm: Some(max_ppm),
+            max_ppm: Some(combined_ppm),
         });
     }
     Ok((jar, out))
@@ -735,14 +760,14 @@ async fn top_impl(
     for r in rows_out {
         let my_action = my_actions.get(&r.card_key).cloned();
         let per_country = build_country_summaries(state, &r);
-        let max_ppm = max_ppm_for_selected(state, &r, &selected_countries);
+        let combined_ppm = combined_ppm_for_selected(state, &r, &selected_countries);
         out.push(ExploreCard {
             card_key: r.card_key,
             card_kind: r.card_kind,
             display_name: clean_spelling_display(&r.display_name),
             per_country,
             my_action,
-            max_ppm: Some(max_ppm),
+            max_ppm: Some(combined_ppm),
         });
     }
 

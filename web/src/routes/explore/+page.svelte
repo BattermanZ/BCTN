@@ -58,14 +58,10 @@
     }
   }
 
-  function maxPpmLabel(card: ExploreCard): string {
-    const candidates = card.per_country.filter((c) =>
-      selectedCountries.includes(c.country as CountryCode)
-    );
-    if (!candidates.length) return '—';
-    const best = candidates.reduce((a, b) => (b.ppm > a.ppm ? b : a));
-    const ppm = Math.round(best.ppm);
-    return `${best.country} ${ppm.toLocaleString()} ppm`;
+  function combinedPpmLabel(card: ExploreCard): string {
+    if (card.max_ppm === undefined || card.max_ppm === null) return '—';
+    const ppm = Math.round(card.max_ppm);
+    return `${ppm.toLocaleString()} ppm`;
   }
 
   function clearResults() {
@@ -342,47 +338,41 @@
     {#each items as item, i (item.card_key)}
       <button
         type="button"
-        class="w-full rounded-2xl border border-zinc-200 bg-white p-3 text-left shadow-sm hover:bg-zinc-50"
+        class="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-left shadow-sm hover:bg-zinc-50"
         onclick={() => open(item)}
       >
         <div class="flex items-center justify-between gap-3">
-          <div class="flex min-w-0 items-start gap-3">
-            <div class="w-10 shrink-0 text-right">
+          <div class="min-w-0">
+            <div class="flex min-w-0 items-baseline gap-2">
+              <div class="truncate text-base font-semibold text-zinc-900">
+                {item.display_name}
+              </div>
               {#if mode === 'top'}
-                <div class="text-sm font-semibold text-zinc-900">#{i + 1}</div>
+                <div class="shrink-0 text-xs text-zinc-400">{combinedPpmLabel(item)}</div>
               {:else}
-                <div class="text-sm font-semibold text-zinc-400">—</div>
+                <div class="shrink-0 text-xs text-zinc-400">Relevant</div>
               {/if}
-            </div>
-            <div class="min-w-0">
-              <div class="flex min-w-0 items-center gap-2">
-                <div class="truncate text-sm font-semibold text-zinc-900">
-                  {item.display_name}
-                </div>
-              </div>
-              <div class="mt-1 text-xs text-zinc-500">
-                {#if mode === 'top'}
-                  {maxPpmLabel(item)}
-                {:else}
-                  Relevant
-                {/if}
-              </div>
             </div>
           </div>
 
-          {#if item.my_action}
-            <div class="shrink-0 rounded-full border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-500">
-              {#if item.my_action === 'superlike'}
-                Super
-              {:else if item.my_action === 'like'}
-                Liked
-              {:else if item.my_action === 'nope'}
-                Skipped
-              {:else}
-                {item.my_action}
-              {/if}
-            </div>
-          {/if}
+          <div class="flex shrink-0 items-center gap-2">
+            {#if item.my_action}
+              <div class="text-[11px] font-semibold text-zinc-400">
+                {#if item.my_action === 'superlike'}
+                  Super
+                {:else if item.my_action === 'like'}
+                  Liked
+                {:else if item.my_action === 'nope'}
+                  Skipped
+                {:else}
+                  {item.my_action}
+                {/if}
+              </div>
+            {/if}
+            {#if mode === 'top'}
+              <div class="w-12 text-right text-base font-semibold text-zinc-900">#{i + 1}</div>
+            {/if}
+          </div>
         </div>
       </button>
     {/each}
