@@ -575,7 +575,7 @@ async fn search_impl(
 
     let mut candidates = load_search_candidates(state, &q_folded, 1000).await?;
 
-    // Fuzzy scoring: prefer prefix matches, then small edit distance on folded keys.
+    // Fuzzy scoring: prefer "starts with", then "contains", then small edit distance on folded keys.
     let max_dist = if q_folded.len() <= 4 { 1 } else { 2 };
     let mut scored = Vec::<(i64, i64, CardStatsRow)>::new();
     let mut seen = HashSet::<String>::new();
@@ -586,17 +586,25 @@ async fn search_impl(
         if !matches_gender_any_selected(gender, &c, &selected_countries) {
             continue;
         }
-        let prefix = if c.folded.starts_with(&q_folded) {
+
+        let match_kind: i64 = if c.folded.starts_with(&q_folded) {
+            0
+        } else if c.folded.contains(&q_folded) {
+            1
+        } else {
+            2
+        };
+
+        let dist: i64 = if match_kind < 2 {
             0
         } else {
-            1
+            let Some(d) = levenshtein_bounded(&q_folded, &c.folded, max_dist) else {
+                continue;
+            };
+            d as i64
         };
-        let dist = levenshtein_bounded(&q_folded, &c.folded, max_dist).map(|d| d as i64);
-        if prefix != 0 && dist.is_none() {
-            continue;
-        }
-        let dist = dist.unwrap_or(0);
-        scored.push((prefix, dist, c));
+
+        scored.push((match_kind, dist, c));
     }
     scored.sort_by(|a, b| {
         a.0.cmp(&b.0)
@@ -613,6 +621,15 @@ async fn search_impl(
     let end = start.saturating_add(page_size as usize);
     let slice = scored.into_iter().map(|(_, _, c)| c).collect::<Vec<_>>();
     let page_rows = slice.get(start..end).unwrap_or(&[]);
+
+    if page_rows.is_empty() {
+        tracing::info!(
+            q_len = q_folded.chars().count(),
+            scored = slice.len(),
+            candidates = seen.len(),
+            "explore_search_empty"
+        );
+    }
 
     let keys = page_rows
         .iter()

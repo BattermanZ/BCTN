@@ -302,7 +302,7 @@
   <div class="mt-4 rounded-3xl border border-zinc-200 bg-white p-4">
     <div class="flex items-center gap-2">
       <input
-        class="w-full rounded-2xl border border-zinc-200 bg-white px-3 py-3 text-sm font-semibold text-zinc-900 placeholder:text-zinc-400"
+        class="w-full rounded-2xl border border-zinc-200 bg-white px-3 py-3 text-base font-semibold text-zinc-900 placeholder:text-zinc-400"
         placeholder="Search names…"
         bind:value={q}
       />
