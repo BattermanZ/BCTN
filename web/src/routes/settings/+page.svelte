@@ -1,8 +1,7 @@
 <script lang="ts">
   import Badge from '$lib/components/Badge.svelte';
   import { api } from '$lib/api';
-  import { parseCountriesCsv, parseGender, parsePopularityCsv } from '$lib/filter_parse';
-  import { currentUser, filters, partnerUser, settings } from '$lib/stores/app';
+  import { currentUser, filters, partnerUser, settings, type AppFilters } from '$lib/stores/app';
   import type { CountryCode } from '$lib/types';
   import { resolveRoute } from '$app/paths';
   import { goto } from '$app/navigation';
@@ -15,24 +14,16 @@
     CL: 'Chile',
   };
 
-  function toggleCountry(c: CountryCode) {
-    filters.update((f) => {
-      const has = f.countries.includes(c);
-      const next = has ? f.countries.filter((x) => x !== c) : [...f.countries, c];
-      return { ...f, countries: next.length ? next : f.countries };
-    });
-  }
-
   let lastNameTimer = $state<number | null>(null);
   let filtersTimer = $state<number | null>(null);
   let filtersHydrated = $state(false);
   let lastSentFiltersKey = $state<string>('');
+  let pendingFilters: AppFilters | null = null;
+  let savingFilters = $state(false);
+  let saveError = $state<string | null>(null);
 
-  function filtersKey(): string {
-    return `${$filters.countries.join(',')}|${$filters.popularity
-      .slice()
-      .sort()
-      .join(',')}|${$filters.gender}`;
+  function filtersKeyFor(f: AppFilters): string {
+    return `${f.countries.join(',')}|${f.popularity.slice().sort().join(',')}|${f.gender}`;
   }
 
   async function patchSettings(patch: {
@@ -42,7 +33,7 @@
     filter_countries?: string;
     filter_popularity?: string;
     filter_gender?: string;
-  }) {
+  }): Promise<boolean> {
     try {
       const s = await api.patchSettings(patch);
       settings.set({
@@ -50,50 +41,57 @@
         lastName: s.last_name,
         bestPickMode: s.best_pick_mode,
       });
-      if (
-        s.filter_countries !== undefined &&
-        s.filter_popularity !== undefined &&
-        s.filter_gender !== undefined
-      ) {
-        filters.set({
-          countries: parseCountriesCsv(s.filter_countries),
-          popularity: parsePopularityCsv(s.filter_popularity),
-          gender: parseGender(s.filter_gender),
-        });
-      }
+      saveError = null;
+      return true;
     } catch (e) {
       const status = (e as { status?: number } | null)?.status;
       if (status === 401) {
         await goto('/login');
+        return false;
       }
+      saveError = (e as Error | null)?.message ?? 'Failed to save settings';
+      return false;
     }
   }
 
-  function scheduleFiltersSave() {
+  function scheduleFiltersSave(next: AppFilters) {
     if (!filtersHydrated) return;
-    const key = filtersKey();
+    const key = filtersKeyFor(next);
     if (key === lastSentFiltersKey) return;
+    pendingFilters = next;
     if (filtersTimer !== null) window.clearTimeout(filtersTimer);
     filtersTimer = window.setTimeout(() => {
-      lastSentFiltersKey = key;
-      void patchSettings({
-        filter_countries: $filters.countries.join(','),
-        filter_popularity: $filters.popularity.join(','),
-        filter_gender: $filters.gender,
-      });
+      if (!pendingFilters) return;
+      const payload = pendingFilters;
+      savingFilters = true;
+      void (async () => {
+        const ok = await patchSettings({
+          filter_countries: payload.countries.join(','),
+          filter_popularity: payload.popularity.join(','),
+          filter_gender: payload.gender,
+        });
+        if (ok) {
+          lastSentFiltersKey = key;
+        }
+        savingFilters = false;
+      })();
       filtersTimer = null;
+      pendingFilters = null;
     }, 300);
   }
 
-  $effect(() => {
-    void $filters.countries;
-    void $filters.popularity;
-    void $filters.gender;
-    scheduleFiltersSave();
-  });
+  function toggleCountry(c: CountryCode) {
+    filters.update((f) => {
+      const has = f.countries.includes(c);
+      const nextCountries = has ? f.countries.filter((x) => x !== c) : [...f.countries, c];
+      const next = { ...f, countries: nextCountries.length ? nextCountries : f.countries };
+      scheduleFiltersSave(next);
+      return next;
+    });
+  }
 
   onMount(() => {
-    lastSentFiltersKey = filtersKey();
+    lastSentFiltersKey = filtersKeyFor($filters);
     filtersHydrated = true;
   });
 
@@ -119,7 +117,9 @@
     filters.update((f) => {
       const has = f.popularity.includes(p);
       const next = has ? f.popularity.filter((x) => x !== p) : [...f.popularity, p];
-      return { ...f, popularity: next.length ? next : f.popularity };
+      const updated = { ...f, popularity: next.length ? next : f.popularity };
+      scheduleFiltersSave(updated);
+      return updated;
     });
   }
 </script>
@@ -135,6 +135,12 @@
 </header>
 
 <div class="mt-4 space-y-4">
+  {#if saveError}
+    <div class="rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+      {saveError}
+    </div>
+  {/if}
+
   <section class="rounded-3xl border border-zinc-200 bg-white p-5">
     <h2 class="text-sm font-semibold text-zinc-900">Filters</h2>
 
@@ -188,10 +194,14 @@
         class="mt-2 w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 shadow-sm"
         value={$filters.gender}
         onchange={(e) =>
-          filters.update((f) => ({
-            ...f,
-            gender: (e.currentTarget as HTMLSelectElement).value as typeof f.gender,
-          }))}
+          filters.update((f) => {
+            const updated = {
+              ...f,
+              gender: (e.currentTarget as HTMLSelectElement).value as typeof f.gender,
+            };
+            scheduleFiltersSave(updated);
+            return updated;
+          })}
       >
         <option value="any">Any</option>
         <option value="unisex">Unisex</option>
@@ -200,6 +210,13 @@
         <option value="mostly_male">Mostly male</option>
         <option value="male">Male</option>
       </select>
+      <div class="mt-2 text-xs text-zinc-500">
+        {#if savingFilters}
+          Saving…
+        {:else}
+          Changes are saved automatically.
+        {/if}
+      </div>
     </div>
   </section>
 
