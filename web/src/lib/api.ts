@@ -39,6 +39,9 @@ export type SettingsResponse = {
   show_last_name: boolean;
   last_name: string;
   best_pick_mode: boolean;
+  filter_countries: string;
+  filter_popularity: string;
+  filter_gender: string;
 };
 export type PatchSettingsRequest = Partial<SettingsResponse>;
 

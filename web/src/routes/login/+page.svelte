@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { currentUser, partnerUser, settings } from '$lib/stores/app';
+  import { parseCountriesCsv, parseGender, parsePopularityCsv } from '$lib/filter_parse';
+  import { currentUser, filters, partnerUser, settings } from '$lib/stores/app';
   import { goto } from '$app/navigation';
 
   let username = $state('');
@@ -30,6 +31,11 @@
         showLastName: s.show_last_name,
         lastName: s.last_name,
         bestPickMode: s.best_pick_mode,
+      });
+      filters.set({
+        countries: parseCountriesCsv(s.filter_countries),
+        popularity: parsePopularityCsv(s.filter_popularity),
+        gender: parseGender(s.filter_gender),
       });
 
       // Prevent iOS Safari "input focus zoom" from persisting after navigation.

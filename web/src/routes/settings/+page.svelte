@@ -1,10 +1,12 @@
 <script lang="ts">
   import Badge from '$lib/components/Badge.svelte';
   import { api } from '$lib/api';
+  import { parseCountriesCsv, parseGender, parsePopularityCsv } from '$lib/filter_parse';
   import { currentUser, filters, partnerUser, settings } from '$lib/stores/app';
   import type { CountryCode } from '$lib/types';
   import { resolveRoute } from '$app/paths';
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
 
   const countries: CountryCode[] = ['US', 'FR', 'CL'];
   const countryLabel: Record<CountryCode, string> = {
@@ -22,11 +24,24 @@
   }
 
   let lastNameTimer = $state<number | null>(null);
+  let filtersTimer = $state<number | null>(null);
+  let filtersHydrated = $state(false);
+  let lastSentFiltersKey = $state<string>('');
+
+  function filtersKey(): string {
+    return `${$filters.countries.join(',')}|${$filters.popularity
+      .slice()
+      .sort()
+      .join(',')}|${$filters.gender}`;
+  }
 
   async function patchSettings(patch: {
     show_last_name?: boolean;
     last_name?: string;
     best_pick_mode?: boolean;
+    filter_countries?: string;
+    filter_popularity?: string;
+    filter_gender?: string;
   }) {
     try {
       const s = await api.patchSettings(patch);
@@ -35,6 +50,17 @@
         lastName: s.last_name,
         bestPickMode: s.best_pick_mode,
       });
+      if (
+        s.filter_countries !== undefined &&
+        s.filter_popularity !== undefined &&
+        s.filter_gender !== undefined
+      ) {
+        filters.set({
+          countries: parseCountriesCsv(s.filter_countries),
+          popularity: parsePopularityCsv(s.filter_popularity),
+          gender: parseGender(s.filter_gender),
+        });
+      }
     } catch (e) {
       const status = (e as { status?: number } | null)?.status;
       if (status === 401) {
@@ -42,6 +68,34 @@
       }
     }
   }
+
+  function scheduleFiltersSave() {
+    if (!filtersHydrated) return;
+    const key = filtersKey();
+    if (key === lastSentFiltersKey) return;
+    if (filtersTimer !== null) window.clearTimeout(filtersTimer);
+    filtersTimer = window.setTimeout(() => {
+      lastSentFiltersKey = key;
+      void patchSettings({
+        filter_countries: $filters.countries.join(','),
+        filter_popularity: $filters.popularity.join(','),
+        filter_gender: $filters.gender,
+      });
+      filtersTimer = null;
+    }, 300);
+  }
+
+  $effect(() => {
+    void $filters.countries;
+    void $filters.popularity;
+    void $filters.gender;
+    scheduleFiltersSave();
+  });
+
+  onMount(() => {
+    lastSentFiltersKey = filtersKey();
+    filtersHydrated = true;
+  });
 
   async function logout() {
     try {
