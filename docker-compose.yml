@@ -1,0 +1,30 @@
+services:
+  bctn:
+    image: 192.168.31.233:5000/bctn:latest
+    container_name: BCTN
+    restart: unless-stopped
+    ports:
+      - "2286:2286"
+    # Bind-mount app state DB only (sessions/swipes/matches).
+    # The names DB is baked into the image at /app/data/bctn.sqlite.
+    volumes:
+      - ./data:/data
+    environment:
+      BCTN_APP_DB: /data/bctn_app.sqlite
+      BCTN_NAMES_DB: /app/data/bctn.sqlite
+      BCTN_STATIC_DIR: /app/web/build
+      BCTN_COOKIE_SECURE: "true"
+      BCTN_PUBLIC_HOST: bctn.battercloud.cc
+      BCTN_BOOTSTRAP_ADMIN_USERNAME: admin
+      BCTN_BOOTSTRAP_ADMIN_PASSWORD: password123
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    # Run as the host user (typical Linux desktop/server default).
+    # Ensure the host `./data` directory is writable by uid/gid 1000, or SQLite will fail to create/open the DB.
+    user: "1000:1000"
