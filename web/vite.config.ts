@@ -1,15 +1,14 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vitest/config';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [sveltekit()],
-  resolve: {
-    conditions: ['browser'],
-  },
+  // Keep this resolution tweak scoped to tests to avoid changing app runtime resolution.
+  resolve: mode === 'test' ? { conditions: ['browser'] } : undefined,
   test: {
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.ts'],
   },
-});
+}));
