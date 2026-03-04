@@ -117,4 +117,50 @@ describe('explore page', () => {
       expect(apiMock.updateSwipe).toHaveBeenCalledWith({ card_key: 'c1', action: 'superlike' });
     });
   });
+
+  it('redirects to login when opening card details returns 401', async () => {
+    apiMock.exploreTop.mockResolvedValueOnce([
+      {
+        card_key: 'c1',
+        card_kind: 'group',
+        display_name: 'Amelie',
+        per_country: [],
+        my_action: 'like',
+        max_ppm: 42,
+      },
+    ]);
+    apiMock.cardDetails.mockRejectedValueOnce({ status: 401, message: 'Unauthorized' });
+
+    render(ExplorePage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: /Amelie/i }));
+
+    await waitFor(() => {
+      expect(gotoMock).toHaveBeenCalledWith('/login');
+    });
+  });
+
+  it('redirects to login when setting action returns 401', async () => {
+    apiMock.exploreTop.mockResolvedValueOnce([
+      {
+        card_key: 'c1',
+        card_kind: 'group',
+        display_name: 'Amelie',
+        per_country: [],
+        my_action: 'like',
+        max_ppm: 42,
+      },
+    ]);
+    apiMock.cardDetails.mockResolvedValueOnce(mkCardDetails('c1', 'Amelie'));
+    apiMock.createSwipe.mockRejectedValueOnce({ status: 401, message: 'Unauthorized' });
+
+    render(ExplorePage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: /Amelie/i }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Super-like' }));
+
+    await waitFor(() => {
+      expect(gotoMock).toHaveBeenCalledWith('/login');
+    });
+  });
 });
