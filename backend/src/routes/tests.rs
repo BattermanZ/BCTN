@@ -127,14 +127,30 @@ async fn create_min_names_db(path: &std::path::Path) {
         "INSERT INTO name_concept (id, concept_key, preferred_name_string_id) VALUES
         (1, 'kyara', 1),
         (2, 'lina', 2),
-        (3, 'noah', 3)",
+        (3, 'noah', 3),
+        (4, 'kyara_group', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO variant_group (variant_group_key, canonical_concept_key) VALUES
+        ('kyara_group', 'kyara')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO variant_group_member (variant_group_key, concept_key) VALUES
+        ('kyara_group', 'kyara'),
+        ('kyara_group', 'kyara_group')",
     )
     .execute(&pool)
     .await
     .unwrap();
     sqlx::query(
         "INSERT INTO name_concept_member (concept_id, name_string_id) VALUES
-        (1, 1), (1, 4), (2, 2), (3, 3)",
+        (1, 1), (1, 4), (2, 2), (3, 3), (4, 1), (4, 4)",
     )
     .execute(&pool)
     .await
@@ -152,7 +168,26 @@ async fn create_min_names_db(path: &std::path::Path) {
         "INSERT INTO concept_country_top100_any (concept_id, country, top100_any) VALUES
         (1, 'US', 0), (1, 'FR', 0), (1, 'CL', 0),
         (2, 'US', 0), (2, 'FR', 0), (2, 'CL', 0),
-        (3, 'US', 0), (3, 'FR', 0), (3, 'CL', 0)",
+        (3, 'US', 0), (3, 'FR', 0), (3, 'CL', 0),
+        (4, 'US', 0), (4, 'FR', 0), (4, 'CL', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO variant_group_country_window_total (variant_group_key, country, total, male, female) VALUES
+        ('kyara_group', 'US', 10, 10, 0),
+        ('kyara_group', 'FR', 10, 10, 0),
+        ('kyara_group', 'CL', 10, 10, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO variant_group_country_top100_any (variant_group_key, country, top100_any) VALUES
+        ('kyara_group', 'US', 0),
+        ('kyara_group', 'FR', 0),
+        ('kyara_group', 'CL', 0)",
     )
     .execute(&pool)
     .await
@@ -162,7 +197,9 @@ async fn create_min_names_db(path: &std::path::Path) {
         ('concept', 'kyara', 'Kyara', 10),
         ('concept', 'kyara', 'Kiara', 4),
         ('concept', 'lina', 'Lina', 8),
-        ('concept', 'noah', 'Noah', 12)",
+        ('concept', 'noah', 'Noah', 12),
+        ('group', 'kyara_group', 'Kyara', 10),
+        ('group', 'kyara_group', 'Kiara', 4)",
     )
     .execute(&pool)
     .await
@@ -173,7 +210,12 @@ async fn create_min_names_db(path: &std::path::Path) {
         ('concept', 'kyara', 'FR', 'Kyara', 1),
         ('concept', 'kyara', 'CL', 'Kyara', 1),
         ('concept', 'kyara', 'US,FR,CL', 'Kyara', 1),
-        ('concept', 'kyara', 'US,FR,CL', 'Kiara', 2)",
+        ('concept', 'kyara', 'US,FR,CL', 'Kiara', 2),
+        ('group', 'kyara_group', 'US', 'Kyara', 1),
+        ('group', 'kyara_group', 'FR', 'Kyara', 1),
+        ('group', 'kyara_group', 'CL', 'Kyara', 1),
+        ('group', 'kyara_group', 'US,FR,CL', 'Kyara', 1),
+        ('group', 'kyara_group', 'US,FR,CL', 'Kiara', 2)",
     )
     .execute(&pool)
     .await
@@ -184,7 +226,12 @@ async fn create_min_names_db(path: &std::path::Path) {
         ('concept', 'kyara', 'US', 2021, 110, 2),
         ('concept', 'kyara', 'US', 2022, 100, 2),
         ('concept', 'kyara', 'US', 2023, 95, 2),
-        ('concept', 'kyara', 'US', 2024, 90, 2)",
+        ('concept', 'kyara', 'US', 2024, 90, 2),
+        ('group', 'kyara_group', 'US', 2020, 120, 2),
+        ('group', 'kyara_group', 'US', 2021, 110, 2),
+        ('group', 'kyara_group', 'US', 2022, 100, 2),
+        ('group', 'kyara_group', 'US', 2023, 95, 2),
+        ('group', 'kyara_group', 'US', 2024, 90, 2)",
     )
     .execute(&pool)
     .await
@@ -1473,7 +1520,7 @@ async fn feed_next_with_filters_returns_matching_card() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/feed/next?countries=US,FR,CL&pop=rare,common,top&gender=male")
+                .uri("/api/feed/next?countries=US,FR,CL&pop=rare,common,top&gender=female")
                 .header("cookie", admin_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1482,8 +1529,14 @@ async fn feed_next_with_filters_returns_matching_card() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let v = json(resp).await;
-    assert!(v["card_key"].as_str().is_some());
-    assert!(v["per_country"].is_array());
+    assert_eq!(v["card_key"], Value::String("lina".to_string()));
+    let per_country = v["per_country"].as_array().unwrap();
+    assert_eq!(per_country.len(), 3);
+    assert!(
+        per_country
+            .iter()
+            .all(|c| c["gender"] == "female" || c["gender"] == "mostly_female")
+    );
 }
 
 #[tokio::test]
@@ -1504,8 +1557,100 @@ async fn feed_batch_limit_is_capped() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let v = json(resp).await;
-    assert!(v.as_array().unwrap().len() <= 25);
-    assert!(!v.as_array().unwrap().is_empty());
+    let cards = v.as_array().unwrap();
+    assert!(cards.len() <= 25);
+    assert!(!cards.is_empty());
+    let mut seen = std::collections::HashSet::<String>::new();
+    for card in cards {
+        let key = card["card_key"].as_str().unwrap().to_string();
+        assert!(seen.insert(key), "duplicate card_key in batch response");
+        assert_eq!(card["per_country"].as_array().unwrap().len(), 3);
+    }
+}
+
+#[tokio::test]
+async fn explore_search_pagination_out_of_range_returns_empty() {
+    let (_dir, _state, app) = setup_app(None).await;
+    let admin_cookie = login(&app, "admin", "password123").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/explore/search?q=ky&page=99&page_size=50")
+                .header("cookie", admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json(resp).await, Value::Array(vec![]));
+}
+
+#[tokio::test]
+async fn explore_search_applies_gender_and_country_filters() {
+    let (_dir, _state, app) = setup_app(None).await;
+    let admin_cookie = login(&app, "admin", "password123").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/explore/search?q=li&gender=female&countries=US,FR,CL")
+                .header("cookie", admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json(resp).await;
+    let rows = v.as_array().unwrap();
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|r| r["card_key"] == "lina"));
+}
+
+#[tokio::test]
+async fn explore_top_pagination_and_gender_filter_work() {
+    let (_dir, _state, app) = setup_app(None).await;
+    let admin_cookie = login(&app, "admin", "password123").await;
+
+    let first_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/explore/top?page=0&page_size=1&gender=female&countries=US,FR,CL")
+                .header("cookie", admin_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page.status(), StatusCode::OK);
+    let p1 = json(first_page).await;
+    assert_eq!(p1.as_array().unwrap().len(), 1);
+    assert_eq!(p1.as_array().unwrap()[0]["card_key"], "lina");
+
+    let second_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/explore/top?page=1&page_size=1&gender=female&countries=US,FR,CL")
+                .header("cookie", admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let p2 = json(second_page).await;
+    assert!(p2.as_array().unwrap().len() <= 1);
+    if let Some(row) = p2.as_array().unwrap().first() {
+        assert_eq!(row["card_key"], "lina");
+    }
 }
 
 #[tokio::test]
@@ -1530,4 +1675,66 @@ async fn card_get_concept_returns_expected_shape() {
     assert!(v["all_spellings"].is_array());
     assert!(v["last5_years"].is_object());
     assert!(v["last5_year_ranks"].is_object());
+}
+
+#[tokio::test]
+async fn card_get_group_returns_expected_shape() {
+    let (_dir, _state, app) = setup_app(None).await;
+    let admin_cookie = login(&app, "admin", "password123").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/card/kyara_group?page=0&page_size=10&countries=US,FR,CL")
+                .header("cookie", admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json(resp).await;
+    assert_eq!(v["card_kind"], Value::String("group".to_string()));
+    assert!(v["all_spellings"].is_array());
+    assert!(v["sex_split"].is_object());
+}
+
+#[tokio::test]
+async fn card_get_page_size_clamped() {
+    let (_dir, _state, app) = setup_app(None).await;
+    let admin_cookie = login(&app, "admin", "password123").await;
+
+    let huge = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/card/kyara?page=0&page_size=999&countries=US,FR,CL")
+                .header("cookie", admin_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(huge.status(), StatusCode::OK);
+    let huge_v = json(huge).await;
+    let huge_spellings = huge_v["all_spellings"].as_array().unwrap();
+    assert!(huge_spellings.len() <= 500);
+
+    let clamped = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/card/kyara?page=0&page_size=500&countries=US,FR,CL")
+                .header("cookie", admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(clamped.status(), StatusCode::OK);
+    let clamped_v = json(clamped).await;
+    assert_eq!(huge_v["all_spellings"], clamped_v["all_spellings"]);
 }
