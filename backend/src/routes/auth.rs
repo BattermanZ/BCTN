@@ -55,28 +55,6 @@ fn token_hash(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn client_id_from_headers(headers: &HeaderMap) -> String {
-    fn first_ip(v: &str) -> Option<&str> {
-        v.split(',')
-            .next()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-    }
-
-    if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
-        && let Some(ip) = first_ip(v)
-    {
-        return ip.to_string();
-    }
-    if let Some(v) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        let s = v.trim();
-        if !s.is_empty() {
-            return s.to_string();
-        }
-    }
-    "unknown".to_string()
-}
-
 fn normalize_host(host: &str) -> String {
     let host = host.split(',').next().unwrap_or(host).trim().to_lowercase();
 
@@ -93,10 +71,32 @@ fn normalize_host(host: &str) -> String {
 
 fn request_host(headers: &HeaderMap) -> Option<String> {
     headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get("host"))
+        .get("host")
         .and_then(|v| v.to_str().ok())
         .map(normalize_host)
+}
+
+fn clear_session_cookie(jar: CookieJar, cookie_secure: bool) -> CookieJar {
+    jar.remove(
+        Cookie::build((SESSION_COOKIE, ""))
+            .http_only(true)
+            .secure(cookie_secure)
+            .same_site(SameSite::Lax)
+            .path("/")
+            .build(),
+    )
+}
+
+pub(crate) fn status_code_for_request_error(err: &anyhow::Error) -> StatusCode {
+    match err.to_string().as_str() {
+        "missing session" | "invalid session" => StatusCode::UNAUTHORIZED,
+        "invalid origin"
+        | "invalid host"
+        | "cross-origin request blocked"
+        | "not admin"
+        | "password change required" => StatusCode::FORBIDDEN,
+        _ => StatusCode::BAD_REQUEST,
+    }
 }
 
 pub(crate) fn ensure_same_origin(state: &AppState, headers: &HeaderMap) -> Result<()> {
@@ -252,15 +252,13 @@ pub(crate) async fn require_session_user_ready(
 pub(crate) async fn login(
     State(state): State<AppState>,
     jar: CookieJar,
-    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let now = now_ts();
-    let client_id = client_id_from_headers(&headers);
-    let key = format!("{}:{}", client_id, req.username.trim().to_lowercase());
+    let key = req.username.trim().to_lowercase();
     if state.login_limiter.record_and_is_limited(&key, now).await {
         tracing::warn!(
-            client_id=%client_id,
+            username=%key,
             user_msg="Too many login attempts from this client. Please wait and try again.",
             "login_rate_limited"
         );
@@ -378,7 +376,7 @@ pub(crate) async fn logout(
         .await
         .ok();
 
-    let jar = jar.remove(Cookie::build((SESSION_COOKIE, "")).path("/").build());
+    let jar = clear_session_cookie(jar, state.cookie_secure);
     (jar, StatusCode::NO_CONTENT).into_response()
 }
 
@@ -480,6 +478,12 @@ async fn change_password_impl(
         .await
         .context("update password")?;
 
+    sqlx::query("DELETE FROM app_session WHERE user_id = ?1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .context("revoke sessions after password change")?;
+
     tx.commit().await?;
-    Ok(jar)
+    Ok(clear_session_cookie(jar, state.cookie_secure))
 }

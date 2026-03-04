@@ -678,7 +678,15 @@ pub(crate) async fn get(
                 user_msg="Could not load name details. If this is a new names database, run `bctn-ingest variants materialize`.",
                 "card_get_failed"
             );
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }

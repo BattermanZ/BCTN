@@ -295,14 +295,6 @@ async fn load_my_actions_for_candidates(
     Ok(out)
 }
 
-fn status_code_for_explore_error(err: &anyhow::Error) -> StatusCode {
-    match err.to_string().as_str() {
-        "missing session" | "invalid session" => StatusCode::UNAUTHORIZED,
-        "invalid origin" | "invalid host" | "cross-origin request blocked" => StatusCode::FORBIDDEN,
-        _ => StatusCode::BAD_REQUEST,
-    }
-}
-
 async fn load_search_candidates(
     state: &AppState,
     query_folded: &str,
@@ -579,7 +571,15 @@ pub(crate) async fn search(
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_search_done"
             );
-            (status_code_for_explore_error(&err), err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }
@@ -719,7 +719,15 @@ pub(crate) async fn top(
                 elapsed_ms = started.elapsed().as_millis(),
                 "explore_top_done"
             );
-            (status_code_for_explore_error(&err), err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }

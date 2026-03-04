@@ -487,6 +487,7 @@ async fn update_swipe_reconciles_matches() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let partner_cookie = login(&app, "partner", "password123").await;
 
     // Partner likes first.
     let resp = app
@@ -832,7 +833,22 @@ async fn auth_change_password_success_clears_must_change_password() {
             Request::builder()
                 .method("GET")
                 .uri("/api/me")
-                .header("cookie", partner_cookie)
+                .header("cookie", partner_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::UNAUTHORIZED);
+
+    let new_cookie = login(&app, "partner", "new-password-123").await;
+    let me = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/me")
+                .header("cookie", new_cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -897,7 +913,7 @@ async fn host_guard_public_host_missing_host_returns_421() {
 }
 
 #[tokio::test]
-async fn host_guard_uses_x_forwarded_host_when_present() {
+async fn host_guard_ignores_x_forwarded_host_when_host_mismatches() {
     let (_dir, _state, app) = setup_app(Some("good.local")).await;
     let resp = app
         .clone()
@@ -912,7 +928,7 @@ async fn host_guard_uses_x_forwarded_host_when_present() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::MISDIRECTED_REQUEST);
 }
 
 #[tokio::test]
@@ -1130,6 +1146,27 @@ async fn users_list_requires_auth() {
 }
 
 #[tokio::test]
+async fn feed_next_without_session_returns_401_with_sanitized_error() {
+    let (_dir, _state, app) = setup_app(None).await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/feed/next")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&body), "unauthorized");
+}
+
+#[tokio::test]
 async fn swipes_create_invalid_card_kind_returns_400() {
     let (_dir, _state, app) = setup_app(None).await;
     let admin_cookie = login(&app, "admin", "password123").await;
@@ -1246,6 +1283,7 @@ async fn swipes_undo_like_removes_match() {
         change_password(&app, &partner_cookie, "new-password-123").await,
         StatusCode::NO_CONTENT
     );
+    let partner_cookie = login(&app, "partner", "new-password-123").await;
 
     for cookie in [partner_cookie.as_str(), admin_cookie.as_str()] {
         let resp = app

@@ -28,24 +28,39 @@ pub(crate) struct LoginLimiter {
     inner: Mutex<std::collections::HashMap<String, Vec<i64>>>,
     max_attempts: usize,
     window_seconds: i64,
+    max_keys: usize,
 }
 
 impl LoginLimiter {
-    pub(crate) fn new(max_attempts: usize, window_seconds: i64) -> Self {
+    pub(crate) fn new(max_attempts: usize, window_seconds: i64, max_keys: usize) -> Self {
         Self {
             inner: Mutex::new(std::collections::HashMap::new()),
             max_attempts,
             window_seconds,
+            max_keys,
         }
     }
 
     pub(crate) async fn record_and_is_limited(&self, key: &str, now: i64) -> bool {
         let mut m = self.inner.lock().await;
         let cutoff = now - self.window_seconds;
-        let v = m.entry(key.to_string()).or_default();
-        v.retain(|ts| *ts >= cutoff);
-        v.push(now);
-        v.len() > self.max_attempts
+        let attempts = {
+            let v = m.entry(key.to_string()).or_default();
+            v.retain(|ts| *ts >= cutoff);
+            v.push(now);
+            v.len()
+        };
+
+        if m.len() > self.max_keys
+            && let Some(oldest_key) = m
+                .iter()
+                .min_by_key(|(_, attempts)| attempts.last().copied().unwrap_or(i64::MIN))
+                .map(|(k, _)| k.clone())
+        {
+            m.remove(&oldest_key);
+        }
+
+        attempts > self.max_attempts
     }
 }
 
@@ -86,7 +101,7 @@ impl AppState {
             names_db,
             country_total_births,
             cookie_secure,
-            login_limiter: Arc::new(LoginLimiter::new(20, 10 * 60)),
+            login_limiter: Arc::new(LoginLimiter::new(20, 10 * 60, 5_000)),
             public_host: public_host
                 .map(|h| h.trim().to_lowercase())
                 .filter(|h| !h.is_empty()),
@@ -99,6 +114,23 @@ impl AppState {
             .await
             .context("run migrations")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LoginLimiter;
+
+    #[tokio::test]
+    async fn login_limiter_eviction_is_bounded() {
+        let limiter = LoginLimiter::new(1, 60, 2);
+
+        assert!(!limiter.record_and_is_limited("alice", 10).await);
+        assert!(!limiter.record_and_is_limited("bob", 11).await);
+        assert!(!limiter.record_and_is_limited("carol", 12).await);
+
+        // `alice` was evicted as the oldest key, so this behaves like a first attempt.
+        assert!(!limiter.record_and_is_limited("alice", 13).await);
     }
 }
 

@@ -35,8 +35,7 @@ async fn host_guard(State(state): State<AppState>, req: Request<Body>, next: Nex
 
     let headers = req.headers();
     let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get("host"))
+        .get("host")
         .and_then(|v| v.to_str().ok())
         .map(normalize_host);
 

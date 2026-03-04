@@ -39,7 +39,7 @@ struct Args {
     static_dir: PathBuf,
 
     /// Mark session cookies as Secure (required behind HTTPS).
-    #[arg(long, env = "BCTN_COOKIE_SECURE", default_value_t = false)]
+    #[arg(long, env = "BCTN_COOKIE_SECURE", default_value_t = true)]
     cookie_secure: bool,
 
     /// Optional public host allowlist (e.g. `bctn.example.com`); rejects other Host values.

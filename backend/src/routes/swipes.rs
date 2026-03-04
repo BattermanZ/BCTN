@@ -102,7 +102,15 @@ pub(crate) async fn create(
                 user_msg="Could not record the swipe. Try again.",
                 "create_swipe_failed"
             );
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }
@@ -212,7 +220,15 @@ pub(crate) async fn update(
                 user_msg="Could not update the swipe. Try again.",
                 "update_swipe_failed"
             );
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }
@@ -318,7 +334,15 @@ pub(crate) async fn undo(
                 user_msg="Could not undo the last swipe. Try again.",
                 "undo_swipe_failed"
             );
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }

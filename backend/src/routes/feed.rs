@@ -316,7 +316,15 @@ pub(crate) async fn next(
                 user_msg="Could not load the next name. If this is a new names database, run `bctn-ingest variants materialize`.",
                 "feed_next_failed"
             );
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }
@@ -335,7 +343,15 @@ pub(crate) async fn batch(
                 user_msg="Could not load names for the deck. If this is a new names database, run `bctn-ingest variants materialize`.",
                 "feed_batch_failed"
             );
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+            let status = super::auth::status_code_for_request_error(&err);
+            let msg = if status == StatusCode::UNAUTHORIZED {
+                "unauthorized"
+            } else if status == StatusCode::FORBIDDEN {
+                "forbidden"
+            } else {
+                "bad request"
+            };
+            (status, msg).into_response()
         }
     }
 }

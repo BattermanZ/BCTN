@@ -46,7 +46,7 @@ COPY data/bctn.sqlite /app/data/bctn.sqlite
 ENV BCTN_STATIC_DIR=/app/web/build
 ENV BCTN_NAMES_DB=/app/data/bctn.sqlite
 ENV BCTN_APP_DB=/data/bctn_app.sqlite
-ENV BCTN_COOKIE_SECURE=false
+ENV BCTN_COOKIE_SECURE=true
 ENV RUST_LOG=info,tower_http=info,sqlx=warn
 
 EXPOSE 2286
