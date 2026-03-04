@@ -46,6 +46,11 @@ struct Args {
     #[arg(long, env = "BCTN_PUBLIC_HOST")]
     public_host: Option<String>,
 
+    /// Trust reverse-proxy forwarded headers (`X-Forwarded-Host`) for host/origin checks.
+    /// Keep disabled unless traffic always comes through a trusted proxy.
+    #[arg(long, env = "BCTN_TRUST_PROXY_HEADERS", default_value_t = false)]
+    trust_proxy_headers: bool,
+
     /// Bootstrap the first admin user if the DB has no users (exits after running).
     #[arg(long, env = "BCTN_BOOTSTRAP_ADMIN_USERNAME")]
     bootstrap_admin_username: Option<String>,
@@ -90,6 +95,7 @@ async fn main() -> Result<()> {
         &args.names_db,
         args.cookie_secure,
         args.public_host,
+        args.trust_proxy_headers,
     )
     .await?;
     state.migrate().await?;
@@ -140,6 +146,11 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("bind {bind}"))?;
     tracing::info!(bind=%bind, static_dir=%args.static_dir.display(), "backend_start");
-    axum::serve(listener, app).await.context("serve")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("serve")?;
     Ok(())
 }

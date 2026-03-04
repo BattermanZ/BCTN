@@ -113,7 +113,8 @@ cargo run -p bctn-ingest --release -- rebuild-all \
 ```sh
 pnpm -C web build
 
-cargo run -p bctn-backend --release
+# Local HTTP dev: Secure cookies must be disabled
+BCTN_COOKIE_SECURE=false cargo run -p bctn-backend --release
 ```
 
 3) Open `http://localhost:2286` (or your LAN host if you run on a server).
@@ -148,6 +149,7 @@ Required / common:
 - `BCTN_STATIC_DIR`: directory containing the built PWA (`web/build`)
 - `BCTN_COOKIE_SECURE`: set to `true` behind HTTPS (Secure cookies)
 - `BCTN_PUBLIC_HOST`: optional hardening; lock requests to a single host (e.g. `bctn.example.com`)
+- `BCTN_TRUST_PROXY_HEADERS`: set to `true` only behind a trusted reverse proxy that sanitizes forwarded headers
 
 One-time admin bootstrap (optional but required for an empty app DB):
 

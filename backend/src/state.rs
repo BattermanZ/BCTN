@@ -14,6 +14,7 @@ pub(crate) struct AppState {
     pub(crate) cookie_secure: bool,
     pub(crate) login_limiter: Arc<LoginLimiter>,
     pub(crate) public_host: Option<String>,
+    pub(crate) trust_proxy_headers: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,15 +42,26 @@ impl LoginLimiter {
         }
     }
 
-    pub(crate) async fn record_and_is_limited(&self, key: &str, now: i64) -> bool {
+    fn retain_recent(v: &mut Vec<i64>, cutoff: i64) {
+        v.retain(|ts| *ts >= cutoff);
+    }
+
+    pub(crate) async fn is_limited(&self, key: &str, now: i64) -> bool {
         let mut m = self.inner.lock().await;
         let cutoff = now - self.window_seconds;
-        let attempts = {
+        let v = m.entry(key.to_string()).or_default();
+        Self::retain_recent(v, cutoff);
+        v.len() >= self.max_attempts
+    }
+
+    pub(crate) async fn record_failure(&self, key: &str, now: i64) {
+        let mut m = self.inner.lock().await;
+        let cutoff = now - self.window_seconds;
+        {
             let v = m.entry(key.to_string()).or_default();
-            v.retain(|ts| *ts >= cutoff);
+            Self::retain_recent(v, cutoff);
             v.push(now);
-            v.len()
-        };
+        }
 
         if m.len() > self.max_keys
             && let Some(oldest_key) = m
@@ -59,8 +71,11 @@ impl LoginLimiter {
         {
             m.remove(&oldest_key);
         }
+    }
 
-        attempts > self.max_attempts
+    pub(crate) async fn clear(&self, key: &str) {
+        let mut m = self.inner.lock().await;
+        m.remove(key);
     }
 }
 
@@ -70,6 +85,7 @@ impl AppState {
         names_db: &Path,
         cookie_secure: bool,
         public_host: Option<String>,
+        trust_proxy_headers: bool,
     ) -> Result<Self> {
         let opts = SqliteConnectOptions::new()
             .filename(app_db)
@@ -105,6 +121,7 @@ impl AppState {
             public_host: public_host
                 .map(|h| h.trim().to_lowercase())
                 .filter(|h| !h.is_empty()),
+            trust_proxy_headers,
         })
     }
 
@@ -125,12 +142,25 @@ mod tests {
     async fn login_limiter_eviction_is_bounded() {
         let limiter = LoginLimiter::new(1, 60, 2);
 
-        assert!(!limiter.record_and_is_limited("alice", 10).await);
-        assert!(!limiter.record_and_is_limited("bob", 11).await);
-        assert!(!limiter.record_and_is_limited("carol", 12).await);
+        assert!(!limiter.is_limited("alice", 10).await);
+        limiter.record_failure("alice", 10).await;
+        assert!(!limiter.is_limited("bob", 11).await);
+        limiter.record_failure("bob", 11).await;
+        assert!(!limiter.is_limited("carol", 12).await);
+        limiter.record_failure("carol", 12).await;
 
         // `alice` was evicted as the oldest key, so this behaves like a first attempt.
-        assert!(!limiter.record_and_is_limited("alice", 13).await);
+        assert!(!limiter.is_limited("alice", 13).await);
+    }
+
+    #[tokio::test]
+    async fn login_limiter_clear_removes_failures() {
+        let limiter = LoginLimiter::new(2, 60, 10);
+        limiter.record_failure("alice", 10).await;
+        limiter.record_failure("alice", 11).await;
+        assert!(limiter.is_limited("alice", 12).await);
+        limiter.clear("alice").await;
+        assert!(!limiter.is_limited("alice", 13).await);
     }
 }
 

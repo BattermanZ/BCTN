@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
@@ -10,6 +11,7 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::net::SocketAddr;
 use time::OffsetDateTime;
 
 use crate::state::AppState;
@@ -69,11 +71,24 @@ fn normalize_host(host: &str) -> String {
     host.split(':').next().unwrap_or(&host).to_string()
 }
 
-fn request_host(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("host")
+fn request_host(headers: &HeaderMap, trust_proxy_headers: bool) -> Option<String> {
+    let host_header = if trust_proxy_headers {
+        headers
+            .get("x-forwarded-host")
+            .or_else(|| headers.get("host"))
+    } else {
+        headers.get("host")
+    };
+    host_header
         .and_then(|v| v.to_str().ok())
         .map(normalize_host)
+}
+
+fn login_limiter_key(username: &str, connect_info: Option<ConnectInfo<SocketAddr>>) -> String {
+    let source = connect_info
+        .map(|c| c.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    format!("{source}:{}", username.trim().to_lowercase())
 }
 
 fn clear_session_cookie(jar: CookieJar, cookie_secure: bool) -> CookieJar {
@@ -119,7 +134,7 @@ pub(crate) fn ensure_same_origin(state: &AppState, headers: &HeaderMap) -> Resul
         .unwrap_or("");
     let origin_host = normalize_host(origin_host);
 
-    let host = request_host(headers).unwrap_or_default();
+    let host = request_host(headers, state.trust_proxy_headers).unwrap_or_default();
     if origin_host.is_empty() || host.is_empty() {
         anyhow::bail!("invalid origin");
     }
@@ -252,13 +267,14 @@ pub(crate) async fn require_session_user_ready(
 pub(crate) async fn login(
     State(state): State<AppState>,
     jar: CookieJar,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let now = now_ts();
-    let key = req.username.trim().to_lowercase();
-    if state.login_limiter.record_and_is_limited(&key, now).await {
+    let key = login_limiter_key(&req.username, connect_info);
+    if state.login_limiter.is_limited(&key, now).await {
         tracing::warn!(
-            username=%key,
+            login_key=%key,
             user_msg="Too many login attempts from this client. Please wait and try again.",
             "login_rate_limited"
         );
@@ -266,8 +282,12 @@ pub(crate) async fn login(
     }
 
     match login_impl(&state, jar, req).await {
-        Ok(resp) => resp.into_response(),
+        Ok(resp) => {
+            state.login_limiter.clear(&key).await;
+            resp.into_response()
+        }
         Err(err) => {
+            state.login_limiter.record_failure(&key, now).await;
             tracing::warn!(
                 error=%err,
                 user_msg="Login failed. Check username and password and try again.",

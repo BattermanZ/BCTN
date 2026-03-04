@@ -294,6 +294,7 @@ async fn setup_app(public_host: Option<&str>) -> (tempfile::TempDir, AppState, a
         &names_db_path,
         false,
         public_host.map(|h| h.to_string()),
+        false,
     )
     .await
     .unwrap();
@@ -383,7 +384,7 @@ async fn bootstrap_then_login_then_me_and_admin_list_users() {
     let names_db_path = dir.path().join("names.sqlite");
     create_min_names_db(&names_db_path).await;
 
-    let state = AppState::new(&db_path, &names_db_path, false, None)
+    let state = AppState::new(&db_path, &names_db_path, false, None, false)
         .await
         .unwrap();
     state.migrate().await.unwrap();
@@ -439,7 +440,7 @@ async fn update_swipe_reconciles_matches() {
     let names_db_path = dir.path().join("names.sqlite");
     create_min_names_db(&names_db_path).await;
 
-    let state = AppState::new(&db_path, &names_db_path, false, None)
+    let state = AppState::new(&db_path, &names_db_path, false, None, false)
         .await
         .unwrap();
     state.migrate().await.unwrap();
@@ -690,6 +691,79 @@ async fn auth_login_rate_limit_returns_429() {
 }
 
 #[tokio::test]
+async fn auth_login_success_clears_rate_limit_bucket() {
+    let (_dir, _state, app) = setup_app(None).await;
+
+    for _ in 0..10 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"wrong-password"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let ok = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"username":"admin","password":"password123"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+
+    for _ in 0..20 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"wrong-password"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let limited = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"username":"admin","password":"wrong-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
 async fn auth_me_without_session_returns_401() {
     let (_dir, _state, app) = setup_app(None).await;
     let resp = app
@@ -929,6 +1003,44 @@ async fn host_guard_ignores_x_forwarded_host_when_host_mismatches() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::MISDIRECTED_REQUEST);
+}
+
+#[tokio::test]
+async fn host_guard_trusted_proxy_uses_x_forwarded_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("app.sqlite");
+    let names_db_path = dir.path().join("names.sqlite");
+    create_min_names_db(&names_db_path).await;
+
+    let state = AppState::new(
+        &db_path,
+        &names_db_path,
+        false,
+        Some("good.local".to_string()),
+        true,
+    )
+    .await
+    .unwrap();
+    state.migrate().await.unwrap();
+    bootstrap_admin(&state.db, "admin", "password123")
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/health")
+                .header("host", "evil.local")
+                .header("x-forwarded-host", "good.local")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]

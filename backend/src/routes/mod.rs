@@ -34,8 +34,14 @@ async fn host_guard(State(state): State<AppState>, req: Request<Body>, next: Nex
     };
 
     let headers = req.headers();
-    let host = headers
-        .get("host")
+    let host_header = if state.trust_proxy_headers {
+        headers
+            .get("x-forwarded-host")
+            .or_else(|| headers.get("host"))
+    } else {
+        headers.get("host")
+    };
+    let host = host_header
         .and_then(|v| v.to_str().ok())
         .map(normalize_host);
 
