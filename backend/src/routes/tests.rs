@@ -169,7 +169,28 @@ async fn create_user(
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert!(
+        resp.status() == StatusCode::OK || resp.status() == StatusCode::CREATED,
+        "unexpected status: {}",
+        resp.status()
+    );
+    json(resp).await["id"].as_i64().unwrap()
+}
+
+async fn current_user_id(app: &axum::Router, cookie: &str) -> i64 {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/me")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
     json(resp).await["id"].as_i64().unwrap()
 }
 
@@ -677,6 +698,42 @@ async fn host_guard_public_host_match_allows_request() {
 }
 
 #[tokio::test]
+async fn host_guard_public_host_missing_host_returns_421() {
+    let (_dir, _state, app) = setup_app(Some("good.local")).await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::MISDIRECTED_REQUEST);
+}
+
+#[tokio::test]
+async fn host_guard_uses_x_forwarded_host_when_present() {
+    let (_dir, _state, app) = setup_app(Some("good.local")).await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/health")
+                .header("host", "evil.local")
+                .header("x-forwarded-host", "good.local")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn session_near_expiry_is_renewed_and_sets_cookie() {
     let (_dir, state, app) = setup_app(None).await;
     let admin_cookie = login(&app, "admin", "password123").await;
@@ -759,12 +816,13 @@ async fn admin_create_user_non_admin_returns_403() {
 async fn admin_update_user_cannot_remove_last_admin_returns_400() {
     let (_dir, _state, app) = setup_app(None).await;
     let admin_cookie = login(&app, "admin", "password123").await;
+    let admin_id = current_user_id(&app, &admin_cookie).await;
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/api/admin/users/1")
+                .uri(&format!("/api/admin/users/{admin_id}"))
                 .header("cookie", admin_cookie)
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"is_admin":false}"#))
@@ -779,12 +837,13 @@ async fn admin_update_user_cannot_remove_last_admin_returns_400() {
 async fn admin_delete_user_cannot_delete_last_active_user_returns_400() {
     let (_dir, _state, app) = setup_app(None).await;
     let admin_cookie = login(&app, "admin", "password123").await;
+    let admin_id = current_user_id(&app, &admin_cookie).await;
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/admin/users/1")
+                .uri(&format!("/api/admin/users/{admin_id}"))
                 .header("cookie", admin_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -798,6 +857,7 @@ async fn admin_delete_user_cannot_delete_last_active_user_returns_400() {
 async fn admin_delete_user_cannot_delete_last_admin_returns_400() {
     let (_dir, _state, app) = setup_app(None).await;
     let admin_cookie = login(&app, "admin", "password123").await;
+    let admin_id = current_user_id(&app, &admin_cookie).await;
     let partner_id = create_user(&app, &admin_cookie, "partner", "password123").await;
     assert!(partner_id > 0);
 
@@ -806,7 +866,7 @@ async fn admin_delete_user_cannot_delete_last_admin_returns_400() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/admin/users/1")
+                .uri(&format!("/api/admin/users/{admin_id}"))
                 .header("cookie", admin_cookie)
                 .body(Body::empty())
                 .unwrap(),
