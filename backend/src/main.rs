@@ -110,31 +110,6 @@ fn collect_inline_script_hashes(html: &str) -> BTreeSet<String> {
     out
 }
 
-fn collect_style_attr_hashes(html: &str) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    let mut i = 0usize;
-    let bytes = html.as_bytes();
-    while i + 6 < bytes.len() {
-        if bytes[i..].starts_with(b"style=") {
-            let quote = bytes.get(i + 6).copied();
-            if quote == Some(b'"') || quote == Some(b'\'') {
-                let q = quote.unwrap_or_default() as char;
-                let start = i + 7;
-                if let Some(end_rel) = bytes[start..].iter().position(|b| *b == q as u8) {
-                    let val = &html[start..start + end_rel];
-                    if !val.is_empty() {
-                        out.insert(csp_sha256_token(val));
-                    }
-                    i = start + end_rel + 1;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-    out
-}
-
 fn html_files_under(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -159,13 +134,11 @@ fn html_files_under(dir: &Path) -> Result<Vec<PathBuf>> {
 fn build_csp_header(static_dir: &Path) -> Result<HeaderValue> {
     let files = html_files_under(static_dir)?;
     let mut script_hashes = BTreeSet::new();
-    let mut style_attr_hashes = BTreeSet::new();
 
     for file in files {
         let html =
             std::fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
         script_hashes.extend(collect_inline_script_hashes(&html));
-        style_attr_hashes.extend(collect_style_attr_hashes(&html));
     }
 
     let mut csp = String::from("default-src 'self'; script-src 'self'");
@@ -173,11 +146,7 @@ fn build_csp_header(static_dir: &Path) -> Result<HeaderValue> {
         csp.push(' ');
         csp.push_str(&h);
     }
-    csp.push_str("; style-src 'self'; style-src-attr 'unsafe-hashes'");
-    for h in style_attr_hashes {
-        csp.push(' ');
-        csp.push_str(&h);
-    }
+    csp.push_str("; style-src 'self'; style-src-attr 'unsafe-inline'");
     csp.push_str(
         "; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
     );
