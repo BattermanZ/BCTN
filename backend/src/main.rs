@@ -5,6 +5,7 @@ mod state;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::{collections::BTreeSet, path::Path};
 
 use anyhow::{Context, Result, bail};
 use axum::body::Body;
@@ -14,7 +15,9 @@ use axum::http::Request;
 use axum::http::header;
 use axum::middleware::Next;
 use axum::response::Response;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use clap::Parser;
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -79,6 +82,109 @@ async fn no_store_html(req: Request<Body>, next: Next) -> Response {
     resp
 }
 
+fn csp_sha256_token(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    format!("'sha256-{}'", B64.encode(digest))
+}
+
+fn collect_inline_script_hashes(html: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut rest = html;
+    while let Some(start) = rest.find("<script") {
+        rest = &rest[start + "<script".len()..];
+        let Some(tag_end) = rest.find('>') else {
+            break;
+        };
+        let open_tag = &rest[..tag_end];
+        let has_src = open_tag.contains("src=");
+        rest = &rest[tag_end + 1..];
+        let Some(close) = rest.find("</script>") else {
+            break;
+        };
+        let body = &rest[..close];
+        if !has_src && !body.is_empty() {
+            out.insert(csp_sha256_token(body));
+        }
+        rest = &rest[close + "</script>".len()..];
+    }
+    out
+}
+
+fn collect_style_attr_hashes(html: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut i = 0usize;
+    let bytes = html.as_bytes();
+    while i + 6 < bytes.len() {
+        if bytes[i..].starts_with(b"style=") {
+            let quote = bytes.get(i + 6).copied();
+            if quote == Some(b'"') || quote == Some(b'\'') {
+                let q = quote.unwrap_or_default() as char;
+                let start = i + 7;
+                if let Some(end_rel) = bytes[start..].iter().position(|b| *b == q as u8) {
+                    let val = &html[start..start + end_rel];
+                    if !val.is_empty() {
+                        out.insert(csp_sha256_token(val));
+                    }
+                    i = start + end_rel + 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn html_files_under(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current)
+            .with_context(|| format!("read_dir {}", current.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|s| s.to_str()) == Some("html") {
+                out.push(path);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn build_csp_header(static_dir: &Path) -> Result<HeaderValue> {
+    let files = html_files_under(static_dir)?;
+    let mut script_hashes = BTreeSet::new();
+    let mut style_attr_hashes = BTreeSet::new();
+
+    for file in files {
+        let html =
+            std::fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
+        script_hashes.extend(collect_inline_script_hashes(&html));
+        style_attr_hashes.extend(collect_style_attr_hashes(&html));
+    }
+
+    let mut csp = String::from("default-src 'self'; script-src 'self'");
+    for h in script_hashes {
+        csp.push(' ');
+        csp.push_str(&h);
+    }
+    csp.push_str("; style-src 'self'; style-src-attr 'unsafe-hashes'");
+    for h in style_attr_hashes {
+        csp.push(' ');
+        csp.push_str(&h);
+    }
+    csp.push_str(
+        "; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    );
+
+    HeaderValue::from_str(&csp).context("invalid csp header")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
@@ -119,6 +225,7 @@ async fn main() -> Result<()> {
     }
 
     let static_service = ServeDir::new(&args.static_dir).append_index_html_on_directories(true);
+    let csp_header = build_csp_header(&args.static_dir)?;
     let mut app = router(state)
         .nest_service("/", static_service)
         .layer(axum::middleware::from_fn(no_store_html))
@@ -141,9 +248,7 @@ async fn main() -> Result<()> {
         ))
         .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(
-                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
-            ),
+            csp_header,
         ));
 
     if args.cookie_secure {
