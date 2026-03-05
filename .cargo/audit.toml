@@ -1,0 +1,5 @@
+[advisories]
+# Transitive via `sqlx-mysql` from `sqlx`; backend is SQLite-only and does not use MySQL RSA paths.
+ignore = [
+  "RUSTSEC-2023-0071",
+]
