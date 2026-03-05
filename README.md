@@ -173,6 +173,14 @@ The main knob is `RUST_LOG` (see `.env.example` for presets). Common values:
 - Quiet (less SQL noise): `RUST_LOG=info,tower_http=info,sqlx=error`
 - Troubleshooting (very verbose): `RUST_LOG=debug,tower_http=info,sqlx=warn`
 
+## Security Maintenance Checks
+
+Run the dependency/security guard script before shipping security-maintenance changes:
+
+```sh
+./scripts/security_dependency_guard.sh
+```
+
 ## Running in Docker (production-like)
 
 This repo includes a distroless Docker build that bakes the names DB into the image and bind-mounts the app DB directory.
