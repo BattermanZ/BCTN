@@ -89,6 +89,17 @@ impl AppState {
         trust_proxy_headers: bool,
         proxy_header_secret: Option<String>,
     ) -> Result<Self> {
+        if trust_proxy_headers
+            && proxy_header_secret
+                .as_deref()
+                .map(|v| v.trim().is_empty())
+                .unwrap_or(true)
+        {
+            anyhow::bail!(
+                "BCTN_TRUST_PROXY_HEADERS requires BCTN_PROXY_HEADER_SECRET to be configured"
+            );
+        }
+
         let opts = SqliteConnectOptions::new()
             .filename(app_db)
             .create_if_missing(true)
@@ -141,7 +152,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::LoginLimiter;
+    use super::{AppState, LoginLimiter};
 
     #[tokio::test]
     async fn login_limiter_eviction_is_bounded() {
@@ -166,6 +177,16 @@ mod tests {
         assert!(limiter.is_limited("alice", 12).await);
         limiter.clear("alice").await;
         assert!(!limiter.is_limited("alice", 13).await);
+    }
+
+    #[tokio::test]
+    async fn trust_proxy_requires_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_db = dir.path().join("app.sqlite");
+        let names_db = dir.path().join("names.sqlite");
+        tokio::fs::write(&names_db, b"not-a-db").await.unwrap();
+        let res = AppState::new(&app_db, &names_db, false, None, true, None).await;
+        assert!(res.is_err());
     }
 }
 

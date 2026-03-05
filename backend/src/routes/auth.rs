@@ -94,11 +94,30 @@ fn request_host(
         .map(normalize_host)
 }
 
-fn login_limiter_key(username: &str, connect_info: Option<ConnectInfo<SocketAddr>>) -> String {
-    let source = connect_info
+fn client_ip_for_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> String {
+    if state.trust_proxy_headers
+        && state
+            .proxy_header_secret
+            .as_deref()
+            .is_some_and(|expected| {
+                headers
+                    .get("x-bctn-proxy-secret")
+                    .and_then(|v| v.to_str().ok())
+                    == Some(expected)
+            })
+        && let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+        && let Some(first) = v.split(',').next().map(|s| s.trim())
+        && !first.is_empty()
+    {
+        return first.to_string();
+    }
+    connect_info
         .map(|c| c.0.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    format!("{source}:{}", username.trim().to_lowercase())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn clear_session_cookie(jar: CookieJar, cookie_secure: bool) -> CookieJar {
@@ -192,6 +211,7 @@ pub(crate) async fn require_session_user(
         anyhow::bail!("missing session");
     };
     let now = now_ts();
+    cleanup_expired_sessions(state, now).await;
     let session_token_hash = token_hash(&token);
     let row = sqlx::query(
         r#"
@@ -298,11 +318,22 @@ pub(crate) async fn require_session_user_ready(
 pub(crate) async fn login(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let now = now_ts();
-    let key = login_limiter_key(&req.username, connect_info);
+    let source_ip = client_ip_for_rate_limit(&state, &headers, connect_info);
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    let key = format!(
+        "{}:{}:{}",
+        source_ip,
+        user_agent,
+        req.username.trim().to_lowercase()
+    );
     if state.login_limiter.is_limited(&key, now).await {
         tracing::warn!(
             login_key=%key,

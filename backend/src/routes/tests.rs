@@ -1039,7 +1039,7 @@ async fn host_guard_trusted_proxy_uses_x_forwarded_host() {
         false,
         Some("good.local".to_string()),
         true,
-        None,
+        Some("proxy-secret".to_string()),
     )
     .await
     .unwrap();
@@ -1057,6 +1057,7 @@ async fn host_guard_trusted_proxy_uses_x_forwarded_host() {
                 .uri("/api/health")
                 .header("host", "evil.local")
                 .header("x-forwarded-host", "good.local")
+                .header("x-bctn-proxy-secret", "proxy-secret")
                 .body(Body::empty())
                 .unwrap(),
         )
