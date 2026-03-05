@@ -34,7 +34,13 @@ async fn host_guard(State(state): State<AppState>, req: Request<Body>, next: Nex
     };
 
     let headers = req.headers();
-    let host_header = if state.trust_proxy_headers {
+    let proxy_secret_ok = state.proxy_header_secret.as_deref().is_none_or(|expected| {
+        headers
+            .get("x-bctn-proxy-secret")
+            .and_then(|v| v.to_str().ok())
+            == Some(expected)
+    });
+    let host_header = if state.trust_proxy_headers && proxy_secret_ok {
         headers
             .get("x-forwarded-host")
             .or_else(|| headers.get("host"))

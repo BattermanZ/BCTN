@@ -71,8 +71,18 @@ fn normalize_host(host: &str) -> String {
     host.split(':').next().unwrap_or(&host).to_string()
 }
 
-fn request_host(headers: &HeaderMap, trust_proxy_headers: bool) -> Option<String> {
-    let host_header = if trust_proxy_headers {
+fn request_host(
+    headers: &HeaderMap,
+    trust_proxy_headers: bool,
+    proxy_header_secret: Option<&str>,
+) -> Option<String> {
+    let proxy_secret_ok = proxy_header_secret.is_none_or(|expected| {
+        headers
+            .get("x-bctn-proxy-secret")
+            .and_then(|v| v.to_str().ok())
+            == Some(expected)
+    });
+    let host_header = if trust_proxy_headers && proxy_secret_ok {
         headers
             .get("x-forwarded-host")
             .or_else(|| headers.get("host"))
@@ -106,6 +116,7 @@ pub(crate) fn status_code_for_request_error(err: &anyhow::Error) -> StatusCode {
     match err.to_string().as_str() {
         "missing session" | "invalid session" => StatusCode::UNAUTHORIZED,
         "invalid origin"
+        | "missing origin"
         | "invalid host"
         | "cross-origin request blocked"
         | "not admin"
@@ -121,7 +132,18 @@ pub(crate) fn ensure_same_origin(state: &AppState, headers: &HeaderMap) -> Resul
         .get(CSRF_ORIGIN_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string());
+    let host = request_host(
+        headers,
+        state.trust_proxy_headers,
+        state.proxy_header_secret.as_deref(),
+    )
+    .unwrap_or_default();
     let Some(origin) = origin else {
+        // Browsers send Host for same-origin state-changing requests.
+        // If Host is present but Origin is absent, treat it as suspicious and block.
+        if !host.is_empty() {
+            anyhow::bail!("missing origin");
+        }
         return Ok(());
     };
 
@@ -134,7 +156,6 @@ pub(crate) fn ensure_same_origin(state: &AppState, headers: &HeaderMap) -> Resul
         .unwrap_or("");
     let origin_host = normalize_host(origin_host);
 
-    let host = request_host(headers, state.trust_proxy_headers).unwrap_or_default();
     if origin_host.is_empty() || host.is_empty() {
         anyhow::bail!("invalid origin");
     }
@@ -151,6 +172,16 @@ pub(crate) fn ensure_same_origin(state: &AppState, headers: &HeaderMap) -> Resul
         anyhow::bail!("cross-origin request blocked");
     }
     Ok(())
+}
+
+async fn cleanup_expired_sessions(state: &AppState, now: i64) {
+    if let Err(err) = sqlx::query("DELETE FROM app_session WHERE expires_at <= ?1")
+        .bind(now)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!(error=%err, "session_cleanup_failed");
+    }
 }
 
 pub(crate) async fn require_session_user(
@@ -342,6 +373,7 @@ async fn login_impl(
     let token = token_hex_32();
     let session_token_hash = token_hash(&token);
     let now = now_ts();
+    cleanup_expired_sessions(state, now).await;
     let expires = now + SESSION_DAYS * 24 * 60 * 60;
 
     sqlx::query(

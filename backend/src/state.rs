@@ -15,6 +15,7 @@ pub(crate) struct AppState {
     pub(crate) login_limiter: Arc<LoginLimiter>,
     pub(crate) public_host: Option<String>,
     pub(crate) trust_proxy_headers: bool,
+    pub(crate) proxy_header_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,6 +87,7 @@ impl AppState {
         cookie_secure: bool,
         public_host: Option<String>,
         trust_proxy_headers: bool,
+        proxy_header_secret: Option<String>,
     ) -> Result<Self> {
         let opts = SqliteConnectOptions::new()
             .filename(app_db)
@@ -122,6 +124,9 @@ impl AppState {
                 .map(|h| h.trim().to_lowercase())
                 .filter(|h| !h.is_empty()),
             trust_proxy_headers,
+            proxy_header_secret: proxy_header_secret
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
         })
     }
 

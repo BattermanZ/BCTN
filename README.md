@@ -150,6 +150,7 @@ Required / common:
 - `BCTN_COOKIE_SECURE`: set to `true` behind HTTPS (Secure cookies)
 - `BCTN_PUBLIC_HOST`: optional hardening; lock requests to a single host (e.g. `bctn.example.com`)
 - `BCTN_TRUST_PROXY_HEADERS`: set to `true` only behind a trusted reverse proxy that sanitizes forwarded headers
+- `BCTN_PROXY_HEADER_SECRET`: optional shared secret required for forwarded host trust (`X-BCTN-Proxy-Secret`)
 
 One-time admin bootstrap (optional but required for an empty app DB):
 

@@ -51,6 +51,11 @@ struct Args {
     #[arg(long, env = "BCTN_TRUST_PROXY_HEADERS", default_value_t = false)]
     trust_proxy_headers: bool,
 
+    /// Shared secret required to trust forwarded host headers.
+    /// If set, requests must include matching `X-BCTN-Proxy-Secret`.
+    #[arg(long, env = "BCTN_PROXY_HEADER_SECRET")]
+    proxy_header_secret: Option<String>,
+
     /// Bootstrap the first admin user if the DB has no users (exits after running).
     #[arg(long, env = "BCTN_BOOTSTRAP_ADMIN_USERNAME")]
     bootstrap_admin_username: Option<String>,
@@ -96,6 +101,7 @@ async fn main() -> Result<()> {
         args.cookie_secure,
         args.public_host,
         args.trust_proxy_headers,
+        args.proxy_header_secret,
     )
     .await?;
     state.migrate().await?;
@@ -132,6 +138,12 @@ async fn main() -> Result<()> {
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("permissions-policy"),
             HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            ),
         ));
 
     if args.cookie_secure {

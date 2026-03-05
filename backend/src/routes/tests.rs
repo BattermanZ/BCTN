@@ -295,6 +295,7 @@ async fn setup_app(public_host: Option<&str>) -> (tempfile::TempDir, AppState, a
         false,
         public_host.map(|h| h.to_string()),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -384,7 +385,7 @@ async fn bootstrap_then_login_then_me_and_admin_list_users() {
     let names_db_path = dir.path().join("names.sqlite");
     create_min_names_db(&names_db_path).await;
 
-    let state = AppState::new(&db_path, &names_db_path, false, None, false)
+    let state = AppState::new(&db_path, &names_db_path, false, None, false, None)
         .await
         .unwrap();
     state.migrate().await.unwrap();
@@ -440,7 +441,7 @@ async fn update_swipe_reconciles_matches() {
     let names_db_path = dir.path().join("names.sqlite");
     create_min_names_db(&names_db_path).await;
 
-    let state = AppState::new(&db_path, &names_db_path, false, None, false)
+    let state = AppState::new(&db_path, &names_db_path, false, None, false, None)
         .await
         .unwrap();
     state.migrate().await.unwrap();
@@ -802,6 +803,26 @@ async fn auth_logout_rejects_cross_origin_returns_403() {
 }
 
 #[tokio::test]
+async fn auth_logout_missing_origin_with_host_returns_403() {
+    let (_dir, _state, app) = setup_app(None).await;
+    let admin_cookie = login(&app, "admin", "password123").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/logout")
+                .header("cookie", admin_cookie)
+                .header("host", "good.local")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn auth_logout_success_returns_204_and_clears_cookie() {
     let (_dir, _state, app) = setup_app(None).await;
     let admin_cookie = login(&app, "admin", "password123").await;
@@ -1018,6 +1039,7 @@ async fn host_guard_trusted_proxy_uses_x_forwarded_host() {
         false,
         Some("good.local".to_string()),
         true,
+        None,
     )
     .await
     .unwrap();
@@ -1041,6 +1063,61 @@ async fn host_guard_trusted_proxy_uses_x_forwarded_host() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn host_guard_trusted_proxy_requires_proxy_secret_when_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("app.sqlite");
+    let names_db_path = dir.path().join("names.sqlite");
+    create_min_names_db(&names_db_path).await;
+
+    let state = AppState::new(
+        &db_path,
+        &names_db_path,
+        false,
+        Some("good.local".to_string()),
+        true,
+        Some("proxy-secret".to_string()),
+    )
+    .await
+    .unwrap();
+    state.migrate().await.unwrap();
+    bootstrap_admin(&state.db, "admin", "password123")
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let blocked = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/health")
+                .header("host", "evil.local")
+                .header("x-forwarded-host", "good.local")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), StatusCode::MISDIRECTED_REQUEST);
+
+    let allowed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/health")
+                .header("host", "evil.local")
+                .header("x-forwarded-host", "good.local")
+                .header("x-bctn-proxy-secret", "proxy-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
 }
 
 #[tokio::test]
