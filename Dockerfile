@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-FROM node:22-slim AS web-deps
+FROM node:24-slim AS web-deps
 WORKDIR /app/web
 ENV CI=true
 RUN corepack enable
@@ -12,7 +12,7 @@ WORKDIR /app/web
 COPY web/ ./
 RUN pnpm build
 
-FROM rust:1.92-slim AS chef
+FROM rust:1.93-slim AS chef
 WORKDIR /app
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
