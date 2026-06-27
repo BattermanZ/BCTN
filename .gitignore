@@ -7,3 +7,6 @@
 *.sqlite-shm
 /data
 .env
+
+# CodeGraph local index (machine-local, do not commit)
+.codegraph/
