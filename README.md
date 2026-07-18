@@ -12,6 +12,37 @@ Under the hood:
 - A **read-write app database** (SQLite) storing accounts, sessions, swipes, and matches.
 - A **Rust backend** that serves both the JSON API and the SvelteKit PWA.
 
+## Why BCTN Is Technically Interesting
+
+BCTN is more than a swipe interface over a list of names:
+
+- **Data pipeline:** the Rust ingestion workspace normalises official national
+  datasets, enriches spelling relationships with optional Wikidata evidence,
+  scores variant-group candidates, and materialises app-facing card tables.
+- **Two-database design:** the generated names catalogue stays immutable at
+  runtime, while private user state lives in a separate migrated SQLite
+  database. The catalogue can be rebuilt without touching accounts or swipes.
+- **Purpose-built ranking:** deck selection combines country, popularity, and
+  gender filters with randomisation, partner-liked prioritisation, and an
+  optional cross-country “Best Picks” score.
+- **Small deployment surface:** one Rust process serves the authenticated JSON
+  API and the pre-built SvelteKit PWA, backed by two local SQLite files.
+- **Deliberately constrained security model:** exactly two accounts, HttpOnly
+  sessions, forced first-login password changes, host validation, and explicit
+  trusted-proxy configuration.
+
+```mermaid
+flowchart LR
+    sources[Official name datasets] --> ingest[bctn-ingest]
+    wikidata[Optional Wikidata evidence] --> ingest
+    ingest --> names[(Read-only names DB)]
+    names --> api[Rust API + static server]
+    state[(Accounts, sessions, swipes, matches)] <--> api
+    api <--> pwa[SvelteKit PWA]
+    pwa <--> user1[Partner 1]
+    pwa <--> user2[Partner 2]
+```
+
 Documentation:
 
 - Product decisions: `@docs/PRODUCT_DECISIONS.md`
