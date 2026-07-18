@@ -1,10 +1,16 @@
 # BCTN
 
-BCTN is a private, two-user baby-name app with a Tinder-like swipe UI. It is built from:
+BCTN is a self-hosted, two-user baby-name app: think Tinder, but for choosing a
+baby name together. You and your partner each swipe through name cards (nope /
+like / super-like), and when you both like the same name, it becomes a **match**.
+Flip any card for spelling variants, popularity over time by country, and a
+male/female split.
+
+Under the hood:
 
 - A **read-only names database** (SQLite) generated from official sources and enrichment logic.
 - A **read-write app database** (SQLite) storing accounts, sessions, swipes, and matches.
-- A Rust backend that serves both the JSON API and the static PWA.
+- A **Rust backend** that serves both the JSON API and the SvelteKit PWA.
 
 Documentation:
 
