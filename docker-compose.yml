@@ -1,6 +1,7 @@
 services:
   bctn:
-    image: 192.168.31.233:5000/bctn:latest
+    # Set APP_IMAGE to the image you built, e.g. bctn:latest
+    image: ${APP_IMAGE:?set APP_IMAGE to the image to run}
     container_name: BCTN
     restart: unless-stopped
     ports:
